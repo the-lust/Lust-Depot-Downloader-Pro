@@ -420,7 +420,7 @@ await process.WaitForExitAsync();
 
 <div align="center">
 
-*Made with ❤️ by the community — Version 1.0.0 — March 2026*
+*Made with ❤️ by the community — Version 2.0.0 — March 2026*
 
 *Big thanks to [oureveryday](https://github.com/oureveryday) for the original DepotDownloader work that made this possible.*
 
