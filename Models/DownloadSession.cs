@@ -1,0 +1,84 @@
+using Newtonsoft.Json;
+
+namespace LustsDepotDownloaderPro.Models;
+
+public class DownloadSession
+{
+    public uint AppId { get; set; }
+    public string AppName { get; set; } = "";
+    public string OutputDir { get; set; } = "";
+    public string CheckpointPath { get; set; } = "";
+    public int MaxDownloads { get; set; } = 8;
+    public List<DepotInfo> Depots { get; set; } = new();
+    public HashSet<string> FileFilters { get; set; } = new();
+    public bool ValidateChecksums { get; set; }
+    public DateTime StartTime { get; set; } = DateTime.UtcNow;
+
+    public static DownloadSession LoadFromCheckpoint(string checkpointPath)
+    {
+        var json = File.ReadAllText(checkpointPath);
+        var session = JsonConvert.DeserializeObject<DownloadSession>(json);
+        
+        if (session == null)
+            throw new Exception("Failed to deserialize checkpoint");
+            
+        session.CheckpointPath = checkpointPath;
+        return session;
+    }
+
+    public void SaveCheckpoint()
+    {
+        var json = JsonConvert.SerializeObject(this, Formatting.Indented);
+        File.WriteAllText(CheckpointPath, json);
+    }
+}
+
+public class DepotInfo
+{
+    public uint DepotId { get; set; }
+    public string DepotName { get; set; } = "";
+    public byte[]? DepotKey { get; set; }
+    public byte[]? ManifestData { get; set; }
+    public ulong ManifestId { get; set; }
+    public List<ManifestFile> Files { get; set; } = new();
+}
+
+public class ManifestFile
+{
+    public string FileName { get; set; } = "";
+    public ulong Size { get; set; }
+    public byte[]? FileHash { get; set; }
+    public int Flags { get; set; }
+    public List<ManifestChunk> Chunks { get; set; } = new();
+}
+
+public class ManifestChunk
+{
+    public string ChunkIdHex { get; set; } = "";
+    public byte[]? ChunkId { get; set; }
+    public ulong Offset { get; set; }
+    public uint CompressedLength { get; set; }
+    public uint UncompressedLength { get; set; }
+    public uint Checksum { get; set; }  // Changed from byte[]? to uint in SteamKit2 3.x
+}
+
+public class ChunkTask
+{
+    public uint DepotId { get; set; }
+    public ManifestChunk Chunk { get; set; } = null!;
+    public ManifestFile File { get; set; } = null!;
+    public uint Size { get; set; }
+    public int RetryCount { get; set; }
+}
+
+public class DownloadStatistics
+{
+    public double DownloadedMB { get; set; }
+    public double TotalMB { get; set; }
+    public double Percent { get; set; }
+    public double SpeedMBps { get; set; }
+    public int CompletedChunks { get; set; }
+    public int TotalChunks { get; set; }
+    public bool IsCompleted { get; set; }
+    public bool IsPaused { get; set; }
+}

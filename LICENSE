@@ -1,89 +1,31 @@
-Lusts Depot Downloader Pro — Source Available License
-Copyright (c) 2026 The Lust. All rights reserved.
+GNU GENERAL PUBLIC LICENSE
+Version 2, June 1991
 
-════════════════════════════════════════════════════════════════════════════════
+Copyright (C) 2026 Lusts Depot Downloader Pro Contributors
 
-PREAMBLE
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
 
-This software is made available publicly in the spirit of transparency and
-community, but is not "open source" in the traditional sense. The author
-retains full ownership and control. You are welcome to read, learn from, and
-use this software under the conditions below — but reproduction, redistribution,
-or modification without explicit permission is not permitted.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
 
-════════════════════════════════════════════════════════════════════════════════
+You should have received a copy of the GNU General Public License along
+with this program; if not, write to the Free Software Foundation, Inc.,
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-PERMISSIONS
+---
 
-The following are permitted, free of charge, to any person obtaining a copy
-of this software:
+This project integrates code from the following open source projects:
+- DepotDownloaderMod (https://github.com/SteamAutoCracks/DepotDownloaderMod)
+- steam-vent (https://github.com/icewind1991/steam-vent)
+- AccessTokenDumper (https://github.com/SteamAutoCracks/AccessTokenDumper)
+- ManifestHub (https://github.com/SteamAutoCracks/ManifestHub)
+- Steam-API-Check-Bypass (https://github.com/SteamAutoCracks/Steam-API-Check-Bypass)
+- DepotDumper (https://github.com/SteamAutoCracks/DepotDumper)
+- SteamKit2 (https://github.com/SteamRE/SteamKit)
 
-  ✓  Use the software for personal, non-commercial purposes
-  ✓  Read and study the source code
-  ✓  Submit bug reports, suggestions, or contributions to the original author
-  ✓  Fork privately for personal experimentation (not for redistribution)
-
-════════════════════════════════════════════════════════════════════════════════
-
-RESTRICTIONS
-
-The following are explicitly prohibited without prior written permission from
-the copyright holder (The Lust):
-
-  ✗  Redistribute this software or any portion of its source code, in original
-     or modified form, publicly or privately, for any purpose
-  ✗  Publish, host, mirror, or share compiled binaries derived from this source
-  ✗  Use this software or its code as the basis for another tool, project,
-     product, or service
-  ✗  Remove or alter this license notice or any copyright attributions
-  ✗  Use the name "Lusts Depot Downloader Pro", "The Lust", or any associated
-     branding without permission
-  ✗  Sell, sublicense, or commercially exploit this software in any form
-
-════════════════════════════════════════════════════════════════════════════════
-
-PERMISSION REQUESTS
-
-The author is open to granting additional permissions on a case-by-case basis.
-If you wish to use this software beyond the scope of this license — including
-integration into other projects, redistribution, or any commercial use — you
-may reach out to request permission. The author reserves the right to grant or
-deny such requests at their sole discretion.
-
-════════════════════════════════════════════════════════════════════════════════
-
-DISCLAIMER OF WARRANTY
-
-THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
-COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-════════════════════════════════════════════════════════════════════════════════
-
-THIRD-PARTY ACKNOWLEDGEMENTS
-
-This software is built upon and gives credit to the following open-source
-projects, each governed by their own respective licenses:
-
-  • SteamKit2         — MIT License
-                        github.com/SteamRE/SteamKit
-
-  • oureveryday       — For foundational depot downloader work
-                        github.com/oureveryday
-
-  • Spectre.Console   — MIT License
-  • Newtonsoft.Json   — MIT License
-  • SharpZipLib       — MIT License
-  • ValveKeyValue     — MIT License
-  • Polly             — BSD License
-  • protobuf-net      — Apache 2.0 License
-
-Use of this software does not transfer or sublicense any rights to the above
-third-party components. Users must comply with each component's own license.
-
-════════════════════════════════════════════════════════════════════════════════
-
-Copyright (c) 2026 The Lust
+All integrated code maintains their original licenses and attributions.
