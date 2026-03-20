@@ -7,86 +7,57 @@ public class Checkpoint
 {
     private readonly string _checkpointPath;
     private readonly ConcurrentHashSet<string> _completedChunks = new();
-    
-    public HashSet<string> CompletedChunks => _completedChunks.ToHashSet();
+    private int _chunksSinceLastSave = 0;
 
-    private Checkpoint(string checkpointPath)
-    {
-        _checkpointPath = checkpointPath;
-    }
+    public HashSet<string> CompletedChunks => _completedChunks.ToHashSet();
+    public string FilePath => _checkpointPath;
+
+    private Checkpoint(string checkpointPath) => _checkpointPath = checkpointPath;
 
     public static Checkpoint Load(string checkpointPath)
     {
-        var checkpoint = new Checkpoint(checkpointPath);
-        
-        if (File.Exists(checkpointPath))
+        var cp = new Checkpoint(checkpointPath);
+        if (!File.Exists(checkpointPath)) return cp;
+        try
         {
-            try
+            var data = JsonConvert.DeserializeObject<CheckpointData>(File.ReadAllText(checkpointPath));
+            if (data?.CompletedChunks != null)
             {
-                var json = File.ReadAllText(checkpointPath);
-                var data = JsonConvert.DeserializeObject<CheckpointData>(json);
-                
-                if (data != null && data.CompletedChunks != null)
-                {
-                    foreach (var chunk in data.CompletedChunks)
-                    {
-                        checkpoint._completedChunks.Add(chunk);
-                    }
-                    
-                    Utils.Logger.Info($"Loaded checkpoint with {data.CompletedChunks.Count} completed chunks");
-                }
-            }
-            catch (Exception ex)
-            {
-                Utils.Logger.Warn($"Failed to load checkpoint: {ex.Message}");
+                foreach (var id in data.CompletedChunks) cp._completedChunks.Add(id);
+                Utils.Logger.Info($"Loaded checkpoint: {data.CompletedChunks.Count} chunks (saved {data.LastSaved:u})");
             }
         }
-        
-        return checkpoint;
+        catch (Exception ex) { Utils.Logger.Warn($"Checkpoint load failed ({ex.Message}) — starting fresh"); }
+        return cp;
     }
 
     public void MarkChunkComplete(string chunkId)
     {
         _completedChunks.Add(chunkId);
-        
-        // Auto-save every 100 chunks
-        if (_completedChunks.Count % 100 == 0)
-        {
-            Save();
-        }
+        if (Interlocked.Increment(ref _chunksSinceLastSave) % 100 == 0) Save();
     }
 
-    public bool IsChunkComplete(string chunkId)
-    {
-        return _completedChunks.Contains(chunkId);
-    }
+    public bool IsChunkComplete(string chunkId) => _completedChunks.Contains(chunkId);
 
     public void Save()
     {
         try
         {
-            var data = new CheckpointData
+            var dir = System.IO.Path.GetDirectoryName(_checkpointPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+            var tmp = _checkpointPath + ".tmp";
+            File.WriteAllText(tmp, JsonConvert.SerializeObject(new CheckpointData
             {
                 CompletedChunks = _completedChunks.ToHashSet(),
-                LastSaved = DateTime.UtcNow
-            };
-            
-            var json = JsonConvert.SerializeObject(data, Formatting.Indented);
-            
-            // Ensure directory exists
-            var directory = Path.GetDirectoryName(_checkpointPath);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-            
-            File.WriteAllText(_checkpointPath, json);
-            Utils.Logger.Debug($"Checkpoint saved: {_completedChunks.Count} chunks");
+                LastSaved       = DateTime.UtcNow
+            }, Formatting.Indented));
+            File.Move(tmp, _checkpointPath, overwrite: true);
+
+            // MUST be Logger.Info with path — GUI stdout parser reads: "Checkpoint saved: <path>"
+            Utils.Logger.Info($"Checkpoint saved: {_checkpointPath}");
         }
-        catch (Exception ex)
-        {
-            Utils.Logger.Error($"Failed to save checkpoint: {ex.Message}");
-        }
+        catch (Exception ex) { Utils.Logger.Error($"Failed to save checkpoint: {ex.Message}"); }
     }
 
     private class CheckpointData
@@ -96,13 +67,11 @@ public class Checkpoint
     }
 }
 
-// Thread-safe HashSet
 public class ConcurrentHashSet<T> where T : notnull
 {
-    private readonly ConcurrentDictionary<T, byte> _dictionary = new();
-
-    public void Add(T item) => _dictionary.TryAdd(item, 0);
-    public bool Contains(T item) => _dictionary.ContainsKey(item);
-    public HashSet<T> ToHashSet() => _dictionary.Keys.ToHashSet();
-    public int Count => _dictionary.Count;
+    private readonly ConcurrentDictionary<T, byte> _d = new();
+    public void Add(T i)       => _d.TryAdd(i, 0);
+    public bool Contains(T i)  => _d.ContainsKey(i);
+    public HashSet<T> ToHashSet() => _d.Keys.ToHashSet();
+    public int Count           => _d.Count;
 }

@@ -7,28 +7,28 @@ namespace LustsDepotDownloaderPro.Core;
 public class DownloadEngine : IDisposable
 {
     private readonly DownloadSession _session;
-    private readonly SteamSession _steamSession;   // FIX: added so workers can use it
+    private readonly SteamSession    _steamSession;
     private readonly CancellationToken _ct;
 
-    private readonly ChunkScheduler _scheduler;
-    private readonly GlobalProgress _progress;
-    private readonly Checkpoint _checkpoint;
+    private readonly ChunkScheduler  _scheduler;
+    private readonly GlobalProgress  _progress;
+    private readonly Checkpoint      _checkpoint;
     private readonly List<DownloadWorker> _workers = new();
     private FileAssembler? _fileAssembler;
 
     public event EventHandler<ProgressEventArgs>? ProgressChanged;
 
-    // FIX: Constructor now requires SteamSession so workers receive it
-    public DownloadEngine(DownloadSession session, SteamSession steamSession, CancellationToken ct)
+    public DownloadEngine(
+        DownloadSession session,
+        SteamSession steamSession,
+        CancellationToken ct)
     {
         _session      = session;
         _steamSession = steamSession;
         _ct           = ct;
-
-        _progress   = new GlobalProgress();
-        _scheduler  = new ChunkScheduler();
-        _checkpoint = Checkpoint.Load(_session.CheckpointPath);
-
+        _progress     = new GlobalProgress();
+        _scheduler    = new ChunkScheduler();
+        _checkpoint   = Checkpoint.Load(_session.CheckpointPath);
         _fileAssembler = new FileAssembler(session.OutputDir);
         Logger.Info($"Download engine initialised for AppID {session.AppId}");
     }
@@ -37,38 +37,43 @@ public class DownloadEngine : IDisposable
     {
         try
         {
-            Logger.Info($"Starting download with {_session.MaxDownloads} concurrent workers");
+            Logger.Info($"Starting with {_session.MaxDownloads} workers");
 
-            // Create workers — FIX: pass _steamSession
             for (int i = 0; i < _session.MaxDownloads; i++)
             {
-                var worker = new DownloadWorker(
-                    i, _scheduler, _progress, _session, _checkpoint, _ct, _steamSession, _fileAssembler!);
-                worker.ProgressChanged += (s, e) => ProgressChanged?.Invoke(this, e);
-                _workers.Add(worker);
+                var w = new DownloadWorker(
+                    i, _scheduler, _progress, _session, _checkpoint, _ct,
+                    _steamSession, _fileAssembler!);
+                w.ProgressChanged += OnWorkerProgress;
+                _workers.Add(w);
             }
 
             var workerTasks = _workers.Select(w => w.RunAsync()).ToList();
-
-            // Schedule all chunks lazily (avoids gigabytes sitting in RAM)
             await ScheduleChunksAsync();
-
-            Logger.Info("All chunks scheduled, waiting for workers...");
+            Logger.Info("All chunks scheduled — waiting for workers...");
             await Task.WhenAll(workerTasks);
 
             if (_ct.IsCancellationRequested)
             {
-                Logger.Warn("Download paused by user");
+                Logger.Warn("Download paused by user — saving checkpoint...");
                 _checkpoint.Save();
+                Logger.Info("Checkpoint saved. Resume with --resume <checkpoint-file>");
             }
             else
             {
-                Logger.Info("Finalizing files...");
+                Logger.Info("All chunks downloaded — finalizing files...");
                 await FinalizeAllFilesAsync();
-                Logger.Info("Download completed successfully");
-                if (_session.ValidateChecksums)
-                    await VerifyFilesAsync();
+                if (_session.ValidateChecksums) await VerifyFilesAsync();
+                Logger.Info("Download completed successfully!");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // User pressed Ctrl+C - save checkpoint and exit gracefully
+            Logger.Info("Download paused — saving checkpoint...");
+            _checkpoint.Save();
+            Logger.Info($"Checkpoint saved to: {_session.CheckpointPath}");
+            // Don't throw - let the caller handle graceful exit
         }
         catch (Exception ex)
         {
@@ -77,92 +82,96 @@ public class DownloadEngine : IDisposable
         }
     }
 
+    private void OnWorkerProgress(object? sender, ProgressEventArgs e)
+    {
+        var snap = _progress.GetSnapshot();
+        var args = new ProgressEventArgs
+        {
+            BytesDownloaded = (long)(snap.DownloadedMB * 1_048_576),
+            PercentComplete  = snap.Percent,
+            SpeedMBps        = snap.SpeedMBps,
+            EtaSeconds       = snap.EtaSeconds,
+            WorkerId         = e.WorkerId,
+            CurrentFile      = e.CurrentFile
+        };
+        ProgressChanged?.Invoke(this, args);
+    }
+
     private async Task ScheduleChunksAsync()
     {
         foreach (var depot in _session.Depots)
         {
             Logger.Info($"Scheduling chunks for depot {depot.DepotId}");
-
             foreach (var file in depot.Files)
             {
-                // Apply file-name filters if any were requested
                 if (_session.FileFilters.Count > 0)
                 {
-                    bool matches = _session.FileFilters.Any(
-                        filter => FilterMatcher.Matches(file.FileName, filter));
-                    if (!matches) continue;
+                    bool match = _session.FileFilters.Any(f => FilterMatcher.Matches(file.FileName, f));
+                    if (!match) continue;
                 }
-
                 foreach (var chunk in file.Chunks)
                 {
                     if (_ct.IsCancellationRequested) return;
-
                     if (_checkpoint.IsChunkComplete(chunk.ChunkIdHex)) continue;
 
-                    // Back-pressure: don't let the queue grow unbounded for huge games
                     while (_scheduler.PendingCount > 5000 && !_ct.IsCancellationRequested)
                         await Task.Delay(100, _ct);
 
                     _scheduler.Enqueue(new ChunkTask
-                    {
-                        DepotId = depot.DepotId,
-                        Chunk   = chunk,
-                        File    = file,
-                        Size    = chunk.CompressedLength
-                    });
+                        { DepotId = depot.DepotId, Chunk = chunk, File = file,
+                          Size = chunk.CompressedLength });
                     _progress.AddTotal(chunk.CompressedLength);
                 }
             }
         }
-
         _scheduler.MarkSchedulingComplete();
+    }
+
+    private async Task FinalizeAllFilesAsync()
+    {
+        if (_fileAssembler == null) return;
+        foreach (var depot in _session.Depots)
+            foreach (var file in depot.Files)
+            {
+                try   { await _fileAssembler.FinalizeFileAsync(file); }
+                catch (Exception ex) { Logger.Warn($"Finalize {file.FileName}: {ex.Message}"); }
+            }
     }
 
     private async Task VerifyFilesAsync()
     {
-        Logger.Info("Verifying downloaded files...");
+        Logger.Info("Verifying files...");
         int total = _session.Depots.Sum(d => d.Files.Count);
         int done  = 0;
-
         foreach (var depot in _session.Depots)
-        {
             foreach (var file in depot.Files)
             {
-                string path = Path.Combine(
+                string path = System.IO.Path.Combine(
                     _session.OutputDir,
-                    file.FileName.Replace('/', Path.DirectorySeparatorChar));
+                    file.FileName.Replace('/', System.IO.Path.DirectorySeparatorChar));
 
                 if (File.Exists(path))
                 {
-                    var fi = new FileInfo(path);
-                    if (fi.Length != (long)file.Size)
-                        Logger.Warn(
-                            $"Size mismatch: {file.FileName} " +
-                            $"(expected {file.Size}, got {fi.Length})");
+                    if (new FileInfo(path).Length != (long)file.Size)
+                        Logger.Warn($"Size mismatch: {file.FileName}");
                 }
-                else
-                {
-                    Logger.Warn($"Missing: {file.FileName}");
-                }
+                else Logger.Warn($"Missing: {file.FileName}");
 
-                if (++done % 100 == 0)
-                    Logger.Info($"Verified {done}/{total} files");
+                if (++done % 100 == 0) Logger.Info($"Verified {done}/{total}");
             }
-        }
-
-        Logger.Info($"Verification done: {done}/{total}");
+        Logger.Info($"Verification complete: {done}/{total} files");
         await Task.CompletedTask;
     }
 
     public DownloadStatistics GetStatistics()
     {
-        var snap = _progress.GetSnapshot();
+        var s = _progress.GetSnapshot();
         return new DownloadStatistics
         {
-            DownloadedMB    = snap.DownloadedMB,
-            TotalMB         = snap.TotalMB,
-            Percent         = snap.Percent,
-            SpeedMBps       = snap.SpeedMBps,
+            DownloadedMB    = s.DownloadedMB,
+            TotalMB         = s.TotalMB,
+            Percent         = s.Percent,
+            SpeedMBps       = s.SpeedMBps,
             CompletedChunks = _checkpoint.CompletedChunks.Count,
             TotalChunks     = _scheduler.TotalScheduled,
             IsCompleted     = _scheduler.IsComplete,
@@ -170,33 +179,15 @@ public class DownloadEngine : IDisposable
         };
     }
 
-    public void Pause()
-    {
-        Logger.Info("Pausing download...");
-        _checkpoint.Save();
-    }
-    private async Task FinalizeAllFilesAsync()
-    {
-        if (_fileAssembler == null) return;
-        foreach (var depot in _session.Depots)
-            foreach (var file in depot.Files)
-            {
-                try { await _fileAssembler.FinalizeFileAsync(file); }
-                catch (Exception ex) { Logger.Warn($"Finalize {file.FileName}: {ex.Message}"); }
-            }
-    }
-
-    public void Dispose()
-    {
-        _fileAssembler?.Dispose();
-    }
+    public void Dispose() => _fileAssembler?.Dispose();
 }
 
 public class ProgressEventArgs : EventArgs
 {
-    public long   BytesDownloaded { get; set; }
-    public double PercentComplete  { get; set; }
-    public double SpeedMBps        { get; set; }
-    public int    WorkerId         { get; set; }
-    public string? CurrentFile     { get; set; }
+    public long    BytesDownloaded  { get; set; }
+    public double  PercentComplete   { get; set; }
+    public double  SpeedMBps         { get; set; }
+    public double  EtaSeconds        { get; set; }
+    public int     WorkerId          { get; set; }
+    public string? CurrentFile       { get; set; }
 }

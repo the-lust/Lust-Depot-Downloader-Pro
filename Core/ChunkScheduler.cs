@@ -5,14 +5,14 @@ namespace LustsDepotDownloaderPro.Core;
 
 public class ChunkScheduler
 {
-    private readonly ConcurrentQueue<ChunkTask> _queue = new();
+    private readonly ConcurrentQueue<ChunkTask> _queue   = new();
     private readonly ConcurrentDictionary<string, ChunkTask> _retry = new();
-    private int _totalScheduled = 0;
-    private bool _schedulingComplete = false;
+    private int _totalScheduled;
+    private bool _schedulingComplete;
 
-    public int PendingCount => _queue.Count + _retry.Count;
-    public int TotalScheduled => _totalScheduled;
-    public bool IsComplete => _schedulingComplete && _queue.IsEmpty && _retry.IsEmpty;
+    public int  PendingCount     => _queue.Count + _retry.Count;
+    public int  TotalScheduled   => _totalScheduled;
+    public bool IsComplete       => _schedulingComplete && _queue.IsEmpty && _retry.IsEmpty;
 
     public void Enqueue(ChunkTask task)
     {
@@ -22,35 +22,44 @@ public class ChunkScheduler
 
     public bool TryDequeue(out ChunkTask? task)
     {
-        // Prioritize retries
+        // Drain retries first (they have back-off already applied)
         foreach (var kvp in _retry.ToArray())
         {
             if (_retry.TryRemove(kvp.Key, out task))
                 return true;
         }
-
-        // Then try regular queue
         return _queue.TryDequeue(out task);
     }
 
-    public void MarkFailed(ChunkTask task)
+    public async Task MarkFailedAsync(ChunkTask task)
     {
         task.RetryCount++;
-
-        if (task.RetryCount > 10) // Increased retry limit
+        if (task.RetryCount > 10)
         {
-            Utils.Logger.Error($"Chunk {task.Chunk.ChunkIdHex} failed after {task.RetryCount} retries");
+            Utils.Logger.Error(
+                $"Chunk {task.Chunk.ChunkIdHex} permanently failed after {task.RetryCount} attempts");
             return;
         }
-
-        // Exponential backoff
-        Task.Delay(Math.Min(1000 * (int)Math.Pow(2, task.RetryCount), 30000)).Wait();
-        
+        // Exponential back-off: 2s, 4s, 8s … capped at 30s
+        int delayMs = Math.Min(2000 * (int)Math.Pow(2, task.RetryCount - 1), 30_000);
+        await Task.Delay(delayMs);
         _retry[task.Chunk.ChunkIdHex] = task;
     }
 
-    public void MarkSchedulingComplete()
+    // Sync overload for callers that can't await (kept for compatibility)
+    public void MarkFailed(ChunkTask task)
     {
-        _schedulingComplete = true;
+        task.RetryCount++;
+        if (task.RetryCount > 10)
+        {
+            Utils.Logger.Error(
+                $"Chunk {task.Chunk.ChunkIdHex} permanently failed after {task.RetryCount} attempts");
+            return;
+        }
+        int delayMs = Math.Min(2000 * (int)Math.Pow(2, task.RetryCount - 1), 30_000);
+        // Use fire-and-forget async re-queue instead of blocking Wait()
+        _ = Task.Delay(delayMs).ContinueWith(_ => _retry[task.Chunk.ChunkIdHex] = task);
     }
+
+    public void MarkSchedulingComplete() => _schedulingComplete = true;
 }

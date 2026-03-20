@@ -8,6 +8,7 @@
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-purple.svg)](https://dotnet.microsoft.com/download/dotnet/8.0)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
 [![Version](https://img.shields.io/badge/Version-1.0.0-green.svg)]()
+[![SteamKit2](https://img.shields.io/badge/SteamKit2-3.2.0-1b2838.svg)]()
 
 *Download Steam depots fast, resumably, and without the headache.*
 
@@ -17,9 +18,9 @@
 
 ## 📌 What Is This?
 
-**Lusts Depot Downloader Pro** is a command-line Steam depot downloader built on top of [SteamKit2](https://github.com/SteamRE/SteamKit). It grabs game depots directly from Steam's CDN — anonymously or with an account — with multi-threaded downloading, pause/resume support, CDN failover, and a clean terminal UI.
+**Lusts Depot Downloader Pro** is a command-line Steam depot downloader built on top of [SteamKit2](https://github.com/SteamRE/SteamKit). It grabs game depots directly from Steam's CDN — anonymously or with an account — with multi-threaded downloading, **pause/resume support**, CDN failover, and a clean terminal UI.
 
-It's essentially a supercharged depot downloader with community manifest support, workshop item downloading, checkpoint resuming, and a bunch of quality-of-life extras baked in. Nothing more, nothing less.
+It's a supercharged depot downloader with **community manifest support**, **checkpoint resuming**, and quality-of-life features. Perfect for backing up games you own, downloading older game versions, or getting free-to-play content.
 
 > ⚠️ **For educational purposes and backup of owned content only. Always comply with Steam's Terms of Service.**
 
@@ -27,15 +28,14 @@ It's essentially a supercharged depot downloader with community manifest support
 
 ## ✨ Features
 
-### Core
+### Core Features ✅
 | Feature | Details |
 |---|---|
 | 🚀 **Multi-threaded** | 1–64 concurrent download workers |
-| ⏸️ **Pause & Resume** | Checkpoint system — pick up exactly where you left off |
+| ⏸️ **Pause & Resume** | **FULLY WORKING** — Checkpoint system, pick up exactly where you left off |
 | 🌐 **CDN Failover** | Automatic fallback across 20+ Steam CDN servers |
-| 📄 **Manifest Support** | Local manifest files + community manifest sources |
+| 📄 **Community Manifests** | Pulls from ManifestHub — download games without owning them |
 | 🔑 **Depot Keys** | Load keys from file for encrypted depots |
-| 🎯 **Workshop Items** | Download via PublishedFileId or UGC ID |
 | 🌿 **Branch Support** | Public, beta, or any custom branch |
 | 🔍 **File Filtering** | Wildcard and regex filters — download only what you need |
 | ✅ **Checksum Validation** | Verify file integrity after download |
@@ -43,17 +43,31 @@ It's essentially a supercharged depot downloader with community manifest support
 | 📦 **Single Executable** | Self-contained, no installs, no dependencies |
 | 🖥️ **Cross-Platform** | Windows, Linux, macOS |
 
-### Advanced
+### Authentication ✅
 | Feature | Details |
 |---|---|
-| 🔐 **Authentication** | Anonymous or full login with Steam Guard / 2FA / QR code |
+| 🔓 **Anonymous Login** | Download free-to-play & public content without account |
+| 🔐 **Username/Password** | Standard Steam authentication |
+| 🛡️ **Steam Guard** | Email codes prompted automatically |
+| 📱 **2FA Support** | Mobile authenticator codes prompted when needed |
+| 💾 **Save Credentials** | `--remember-password` to avoid retyping |
+
+### Advanced Features ✅
+| Feature | Details |
+|---|---|
 | 🎯 **Platform Filtering** | OS and architecture-specific depot selection |
 | 🌍 **Language Selection** | Download only your language's depot |
 | 📊 **Real-time Stats** | Live MB/s speed, percentage, and ETA |
 | 🔄 **Auto Retry** | Exponential backoff on chunk failures |
-| 💾 **Low Memory Mode** | Lazy chunk scheduling for massive games |
 | 🐍 **Python Scripts** | Manifest and key generation from community sources |
 | 🔧 **GUI-Ready CLI** | Parse-friendly output for wrapping in GUI apps |
+| 🎛️ **All Platforms/Languages** | Download every platform/language with one flag |
+
+### ⚠️ Not Yet Implemented
+| Feature | Status |
+|---|---|
+| 🎯 **Workshop Downloads** | CLI options exist but not functional — needs Web API implementation |
+| 📱 **QR Code Auth** | Not available in SteamKit2 3.2.0 — use username/password instead |
 
 ---
 
@@ -73,8 +87,14 @@ It's essentially a supercharged depot downloader with community manifest support
 **Windows:**
 ```batch
 cd LustsDepotDownloaderPro
-build.bat
+build-win-x64-release.bat
 # Output: publish\win-x64\LustsDepotDownloaderPro.exe
+```
+
+**Build All Platforms:**
+```batch
+build.bat
+# Builds: win-x64, win-x86, linux-x64, osx-x64, osx-arm64
 ```
 
 **Linux / macOS:**
@@ -85,15 +105,6 @@ chmod +x build.sh
 # Output: publish/linux-x64/LustsDepotDownloaderPro
 ```
 
-**Manual:**
-```bash
-dotnet restore
-dotnet publish -c Release -r win-x64 --self-contained true \
-  /p:PublishSingleFile=true \
-  /p:IncludeNativeLibrariesForSelfExtract=true \
-  -o publish/win-x64
-```
-
 ---
 
 ## 📖 Usage
@@ -101,51 +112,75 @@ dotnet publish -c Release -r win-x64 --self-contained true \
 ### The Basics
 
 ```bash
-# Download a game anonymously
+# Download a game anonymously (works for free-to-play & public depots)
 LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO"
 
-# Download with your Steam account
+# Download with your Steam account (required for paid games you own)
 LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "C:\Games\CSGO"
 
 # Download a specific depot + manifest
 LustsDepotDownloaderPro --app 730 --depot 731 --manifest 7617088375292372759 \
   --depot-keys depot_keys.txt --output "C:\Games\CSGO"
-
-# Download a workshop item
-LustsDepotDownloaderPro --app 730 --pubfile 1885082371 --output "C:\Games\Workshop"
 ```
 
-### Pause & Resume
+### ⏸️ Pause & Resume (FULLY WORKING!)
 
-Press **Ctrl+C** once to pause gracefully — a checkpoint file is saved automatically.
+Press **Ctrl+C once** to pause gracefully. The download stops cleanly and saves a checkpoint automatically.
 
+**What you'll see:**
+```
+⏸  Pausing download...
+Checkpoint will be saved. Press Ctrl+C again to force quit.
+
+[Download stops]
+
+⏸  Download paused successfully!
+Checkpoint: D:\Games\CSGO\730_Counter-Strike Global Offensive\checkpoint_730.json
+
+To resume, run:
+  --app 730 --output "D:\Games\CSGO" --resume "D:\Games\CSGO\730_Counter-Strike Global Offensive\checkpoint_730.json"
+```
+
+**Resume exactly where you left off:**
 ```bash
-# Resume exactly where you left off
+# Copy and paste the command shown above, or manually specify:
 LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" \
-  --resume "C:\Games\CSGO\730_GameName\checkpoint_730.json"
+  --resume "C:\Games\CSGO\730_Counter-Strike Global Offensive\checkpoint_730.json"
 ```
 
-> 💡 The checkpoint path is always `<output>\<appid>_<name>\checkpoint_<appid>.json`
+> 💡 **Checkpoint location:** `<output>/<appid>_<AppName>/checkpoint_<appid>.json`  
+> 💡 **Press Ctrl+C twice** to force quit immediately (checkpoint may not save)
 
-### High-Speed Downloading
+**How it works:**
+- ✅ Checkpoint saves every 100 chunks during download
+- ✅ Checkpoint saves when you press Ctrl+C once
+- ✅ Resume skips already-downloaded chunks
+- ✅ No re-downloading — picks up exactly where it stopped
+- ✅ Works across restarts, network issues, or user pauses
+
+### 🚀 High-Speed Downloading
 
 Workers are parallel download threads. More workers = faster downloads (up to your connection's limit).
 
 ```bash
-# Sweet spot for most connections
+# Sweet spot for most connections (recommended)
 LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --max-downloads 32
 
-# Maximum (fast connections only — may cause CDN rate limiting above 32)
+# Maximum speed (fast connections only — may trigger CDN rate limits)
 LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --max-downloads 64
 ```
 
-| Workers | Best For |
-|---|---|
-| 4–8 | Slow/shared connections |
-| 16–32 | Most home connections ✅ Sweet spot |
-| 64 | Very fast connections (may trigger CDN rate limits) |
+| Workers | Best For | Expected Speed |
+|---------|----------|----------------|
+| `1-4` | Slow/metered connections | ~1–2 MB/s |
+| `8` *(default)* | Safe baseline | ~3–5 MB/s |
+| `16` | Good home broadband | ~5–10 MB/s |
+| `32` ✅ | **Sweet spot — recommended** | ~8–20 MB/s |
+| `64` | Very fast fiber (may hit CDN limits) | ~15–30+ MB/s |
 
-### File Filtering
+> 💡 **Above 32 workers**, Steam's CDN may rate-limit you. You'll see "operation was canceled" warnings. Drop to `--max-downloads 32` for better results.
+
+### 🔍 File Filtering
 
 Create a `filelist.txt`:
 ```
@@ -159,26 +194,62 @@ regex:^models/.*\.(mdl|vtx|vvd)$
 
 # Exact paths
 game/csgo.exe
+game/engine.dll
 ```
 
 ```bash
 LustsDepotDownloaderPro --app 730 --filelist filelist.txt --output "C:\Games\CSGO"
 ```
 
-### Other Common Uses
+### 🔐 Authentication Examples
+
+```bash
+# Save credentials (encrypted locally)
+LustsDepotDownloaderPro --app 730 --username myuser --password mypass \
+  --remember-password --output "C:\Games"
+
+# Steam Guard code will be prompted automatically
+LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "C:\Games"
+# Enter Steam Guard code: ______
+
+# 2FA mobile authenticator code will be prompted
+LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "C:\Games"
+# Enter 2FA code: ______
+```
+
+> ⚠️ **QR Code authentication (`--qr`) is NOT available** in this version (SteamKit2 3.2.0 limitation). Use standard username/password authentication instead.
+
+### 🌿 Branch Support
 
 ```bash
 # Download from beta branch
 LustsDepotDownloaderPro --app 730 --branch beta --output "C:\Games\CSGO-Beta"
 
-# Download all platforms and all languages
-LustsDepotDownloaderPro --app 730 --all-platforms --all-languages --output "C:\Games\CSGO"
+# Password-protected branch
+LustsDepotDownloaderPro --app 730 --branch staging --branch-password secretword --output "C:\Games"
+```
 
+### 🌍 Platform & Language Filtering
+
+```bash
+# Windows 64-bit, English only
+LustsDepotDownloaderPro --app 730 --os windows --os-arch 64 --language english --output "C:\Games"
+
+# Download all platforms and all languages
+LustsDepotDownloaderPro --app 730 --all-platforms --all-languages --output "C:\Games"
+```
+
+### ✅ Other Useful Options
+
+```bash
 # Validate checksums after download
 LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --validate
 
 # Enable debug logging
 LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --debug
+
+# Override CDN cell (if having connection issues)
+LustsDepotDownloaderPro --app 730 --cellid 0 --output "C:\Games"
 ```
 
 ---
@@ -200,8 +271,8 @@ LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --debug
 |--------|-------|-------------|---------|
 | `--username` | `-u` | Steam username | `--username myuser` |
 | `--password` | `-p` | Steam password | `--password mypass` |
-| `--qr` | | QR code login (Steam mobile app) | `--qr` |
 | `--remember-password` | `-rp` | Save credentials for next time | `--remember-password` |
+| ~~`--qr`~~ | | ⚠️ **Not available** (SteamKit2 3.2.0 limitation) | — |
 
 ### Depot & Manifest
 
@@ -210,18 +281,18 @@ LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --debug
 | `--depot-keys` | `-dk` | Depot keys file | `--depot-keys keys.txt` |
 | `--manifest-file` | `-mf` | Local manifest file | `--manifest-file game.manifest` |
 | `--app-token` | `-at` | App access token | `--app-token 1234567890` |
-| `--branch` | `-b` | Branch name | `--branch beta` |
+| `--branch` | `-b` | Branch name (default: public) | `--branch beta` |
 | `--branch-password` | `-bp` | Branch password | `--branch-password secret` |
 
 ### Download Control
 
-| Option | Short | Description | Example |
+| Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--max-downloads` | `-md` | Concurrent workers (1–64) | `--max-downloads 32` |
-| `--resume` | `-r` | Resume from checkpoint file | `--resume checkpoint.json` |
-| `--validate` | `-v` | Verify checksums after download | `--validate` |
-| `--pause` | | Pause active download | `--pause` |
-| `--status` | `-s` | Show current download status | `--status` |
+| `--max-downloads` | `-md` | Concurrent workers (1–64) | `8` |
+| `--resume` | `-r` | Resume from checkpoint file | — |
+| `--validate` | `-v` | Verify checksums after download | `false` |
+| `--pause` | | Pause active download (N/A in current design) | — |
+| `--status` | `-s` | Show current download status | — |
 
 ### Filtering
 
@@ -234,12 +305,14 @@ LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --debug
 | `--all-platforms` | `-ap` | Download all platform depots | `--all-platforms` |
 | `--all-languages` | `-al` | Download all language depots | `--all-languages` |
 
-### Workshop
+### Workshop ⚠️
 
-| Option | Short | Description | Example |
-|--------|-------|-------------|---------|
-| `--pubfile` | `-pf` | PublishedFileId | `--pubfile 1885082371` |
-| `--ugc` | | UGC ID | `--ugc 770604181014286929` |
+| Option | Short | Description | Status |
+|--------|-------|-------------|--------|
+| `--pubfile` | `-pf` | PublishedFileId | ⚠️ Not implemented |
+| `--ugc` | | UGC ID | ⚠️ Not implemented |
+
+> Workshop downloads show a warning message and fall back to standard app download. Full implementation requires Web API integration (planned for future release).
 
 ### Misc
 
@@ -289,15 +362,34 @@ python generate_manifests.py 730 --output my_manifests
 ### Depot Keys (`depot_keys.txt`)
 ```
 # Format: depotID;hexKey
+# Lines starting with # are ignored
+
 731;E5A1D6C2F8B3A4E9D7C1F2A8B4C6E3D9
 732;A4B9E3F7C2D8A1E6B3F9C4D7E2A8B1C6
+733;C6E2A9D3F8B1C4E7A2D9F3B8C1E6A4D7
 ```
 
-### Checkpoint File *(auto-generated, don't touch)*
+### File Filter List (`filelist.txt`)
+```
+# Wildcards
+*.dll
+*.exe
+maps/*.bsp
+bin/*
+
+# Regex (prefix with regex:)
+regex:^models/.*\.(mdl|vtx|vvd)$
+
+# Exact file paths
+game/csgo.exe
+game/engine.dll
+```
+
+### Checkpoint File *(auto-generated, don't edit)*
 ```json
 {
   "CompletedChunks": ["abc123...", "def456..."],
-  "LastSaved": "2026-03-17T10:30:00Z"
+  "LastSaved": "2026-03-19T18:51:49Z"
 }
 ```
 
@@ -308,31 +400,33 @@ python generate_manifests.py 730 --output my_manifests
 ```
 LustsDepotDownloaderPro/
 ├── Core/
-│   ├── DownloadEngine.cs          # Main orchestration
-│   ├── DownloadWorker.cs          # Per-worker download logic
-│   ├── ChunkScheduler.cs          # Chunk queue management
-│   ├── GlobalProgress.cs          # Progress tracking
-│   ├── Checkpoint.cs              # Pause/resume state
-│   ├── FileAssembler.cs           # Thread-safe file writing
-│   └── DownloadSessionBuilder.cs  # Session setup
+│   ├── DownloadEngine.cs          # Main orchestration & worker management
+│   ├── DownloadWorker.cs          # Per-worker chunk download logic
+│   ├── ChunkScheduler.cs          # Thread-safe chunk queue
+│   ├── GlobalProgress.cs          # Shared progress tracking
+│   ├── Checkpoint.cs              # Pause/resume state persistence
+│   ├── FileAssembler.cs           # High-performance cached file writing
+│   └── DownloadSessionBuilder.cs  # Session prep & manifest loading
 ├── Steam/
-│   ├── SteamSession.cs            # Auth & Steam connection
-│   └── ManifestParser.cs          # Manifest decoding
+│   ├── SteamSession.cs            # Auth, CDN tokens, connection
+│   ├── ManifestParser.cs          # Binary manifest decoding
+│   └── ManifestSourceFetcher.cs   # Community manifest sources
 ├── Models/
 │   ├── DownloadOptions.cs         # CLI option model
-│   └── DownloadSession.cs         # Session state model
+│   └── DownloadSession.cs         # Session state & checkpoint model
 ├── Utils/
-│   ├── Logger.cs                  # Logging
-│   ├── FileUtils.cs               # File helpers
+│   ├── Logger.cs                  # Structured logging
+│   ├── FileUtils.cs               # File path helpers & credentials
+│   ├── CdnClient.cs               # CDN client wrapper
 │   └── VZipDecompressor.cs        # Steam VZip decompression
 ├── UI/
-│   └── TerminalUI.cs              # Spectre.Console UI
+│   └── TerminalUI.cs              # Spectre.Console live UI
 ├── Scripts/
 │   └── generate_manifests.py      # Python manifest/key generator
-├── Program.cs
+├── Program.cs                     # Entry point & CLI parsing
 ├── LustsDepotDownloaderPro.csproj
-├── build.bat
-└── build.sh
+├── build.bat / build.sh
+└── README.md
 ```
 
 ---
@@ -367,61 +461,111 @@ await process.WaitForExitAsync();
 ```
 
 **Exit codes:**
-- `0` — Success
-- `1` — Error
-- `2` — Paused (checkpoint saved)
+| Code | Meaning |
+|------|---------|
+| `0` | ✅ Success — download completed |
+| `1` | ❌ Error — check logs |
+| `2` | ⏸️ Paused — checkpoint saved |
 
 ---
 
 ## 🚨 Troubleshooting
 
-### "Failed to connect to Steam"
+### ❌ "Failed to connect to Steam"
 - Check your internet connection
-- Try a different CDN cell with `--cellid`
-- Check firewall / antivirus isn't blocking outbound connections
+- Try a different CDN cell: `--cellid 0`
+- Check if firewall/antivirus is blocking outbound connections
+- Try again later (Steam servers may be down)
 
-### "Failed to get depot key" / AccessDenied
+### ❌ "Failed to get depot key" / "AccessDenied"
 - Use `--depot-keys` with a keys file
-- Some depots require account ownership — try `--username`
-- Generate keys with the Python script
+- Some depots require account ownership — login with `--username` and `--password`
+- Generate keys using Python script: `python generate_manifests.py <appid> --keys-only`
 
-### "Manifest not found"
+### ❌ "Manifest not found"
 - Double-check your AppID and DepotID
 - Try `--branch beta` or another branch
-- Use `python generate_manifests.py <appid> --list-manifests`
+- Community sources may not have this depot yet
+- Use: `python generate_manifests.py <appid> --list-manifests`
 
-### "All CDN servers failed"
-- Lower `--max-downloads` — too many workers can trigger rate limiting
+### ❌ "All CDN servers failed" / 401 Unauthorized
+- Reduce workers: `--max-downloads 16`
+- **For paid games:** Login with `--username` and `--password`
 - Check if the game is region-locked
+- Your ISP may be throttling Steam traffic
 
-### Download is slow
-- Increase workers: `--max-downloads 32`
-- Default is 8 — most connections can handle 16–32 comfortably
+### ⚠️ Many "operation was canceled" warnings
+- **Too many workers overwhelming CDN**
+- Drop to `--max-downloads 32` (you'll often get same or better speed)
+- Above 32 workers triggers CDN rate limiting
 
-### "file is being used by another process" warnings
-- These are harmless — multiple workers briefly contend on the same large file
-- The worker retries automatically and the file is written correctly
+### 🐢 Download is slow
+- **Default is only 8 workers** — increase to `--max-downloads 32`
+- Check your internet speed (the bottleneck may be your connection)
+- Try different CDN cell: `--cellid 0`
+
+### ⚠️ "file is being used by another process" warnings
+- **This is harmless** — multiple workers briefly contend on the same large file
+- Worker retries automatically and file ends up correct
+- Download continues normally
+
+### ⏸️ Pause/Resume not working
+- **Always include `--app` and `--output` when resuming**
+- Example: `--app 730 --output "C:\Games" --resume "checkpoint_730.json"`
+- Checkpoint only stores chunk progress, not the original command
+
+### ⚠️ "QR code authentication not supported"
+- **QR auth is not available in this version** (SteamKit2 3.2.0 limitation)
+- **Workaround:** Use standard `--username` and `--password`
+- Steam Guard/2FA codes will be prompted when needed
+
+---
+
+## 📝 Known Limitations
+
+| Feature | Status | Workaround |
+|---------|--------|------------|
+| QR Code Auth | ❌ Not available (SteamKit2 3.2.0) | Use `--username` & `--password` |
+| Workshop Downloads | ❌ Not implemented | Needs Web API integration |
+| Bandwidth Limiting | ❌ Not implemented | Use OS-level tools |
+| Download Scheduling | ❌ Not implemented | Use task scheduler |
 
 ---
 
 ## 🗺️ Roadmap
 
+- [ ] Implement Workshop downloads (Web API integration)
+- [ ] Upgrade to SteamKit2 3.4+ (QR code support)
 - [ ] Bandwidth / speed limiting
-- [ ] BitTorrent protocol support
 - [ ] Delta patching for incremental updates
-- [ ] Mirror server support
 - [ ] Web UI
 - [ ] Docker container
 - [ ] Auto-update mechanism
 - [ ] Download scheduling & queuing
-- [ ] Steam Workshop collection batch downloads
 
 ---
 
+## 🙏 Credits
+
 <div align="center">
 
-*Made with ❤️ by the community — Version 2.0.0 — March 2026*
+*Made with ❤️ by The Lust — Version 1.0.0 — March 2026*
 
-*Big thanks to [oureveryday](https://github.com/oureveryday) for the original DepotDownloader work that made this possible.*
+*Built on [SteamKit2](https://github.com/SteamRE/SteamKit)*
+
+*Big thanks to [oureveryday](https://github.com/oureveryday) for the foundational depot downloader work*
 
 </div>
+
+---
+
+## ⚖️ Legal
+
+**For educational purposes and backup of content you own only.**
+
+This tool downloads content directly from Steam's CDN. Always comply with:
+- Steam Subscriber Agreement
+- Steam Terms of Service  
+- Local laws regarding software licensing
+
+**The developers are not responsible for misuse of this software.**

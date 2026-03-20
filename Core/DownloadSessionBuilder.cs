@@ -8,7 +8,7 @@ namespace LustsDepotDownloaderPro.Core;
 
 public class DownloadSessionBuilder
 {
-    private readonly SteamSession _steam;
+    private readonly SteamSession    _steam;
     private readonly DownloadOptions _options;
 
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
@@ -20,7 +20,7 @@ public class DownloadSessionBuilder
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("LustsDepotDownloaderPro/1.0");
     }
 
-    // ─── App name ─────────────────────────────────────────────────────────────
+    // ─── App name ────────────────────────────────────────────────────────
 
     public async Task<string> GetAppNameAsync(uint appId)
     {
@@ -35,7 +35,47 @@ public class DownloadSessionBuilder
         return $"App_{appId}";
     }
 
-    // ─── Main build ───────────────────────────────────────────────────────────
+    // ─── Workshop download ────────────────────────────────────────────────
+
+    public async Task<DownloadSession> BuildWorkshopSessionAsync(string outputPath)
+    {
+        var session = new DownloadSession
+        {
+            AppId          = _options.AppId,
+            AppName        = await GetAppNameAsync(_options.AppId),
+            OutputDir      = outputPath,
+            CheckpointPath = Path.Combine(outputPath, $"checkpoint_{_options.AppId}.json"),
+            MaxDownloads   = _options.MaxDownloads,
+        };
+
+        // Resolve workshop item → (depotId, manifestId) via SteamWorkshop
+        try
+        {
+            if (_options.PubFileId.HasValue)
+            {
+                Logger.Warn($"Workshop downloads (PublishedFileId) are not yet fully implemented in this version.");
+                Logger.Info("Workshop download requires complex Web API calls. Falling back to standard app download...");
+                // TODO: Implement using ISteamRemoteStorage/GetPublishedFileDetails Web API
+                // or SteamWorkshop handler
+            }
+            else if (_options.UgcId.HasValue)
+            {
+                Logger.Warn($"Workshop UGC downloads are not yet fully implemented in this version.");
+                Logger.Info("Falling back to standard app download...");
+                // TODO: Implement UGC download
+            }
+
+            // Fall back to building a normal session for the parent app
+            return await BuildAsync(outputPath);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"Workshop session build failed: {ex.Message}");
+            throw;
+        }
+    }
+
+    // ─── Main build ──────────────────────────────────────────────────────
 
     public async Task<DownloadSession> BuildAsync(string outputPath)
     {
@@ -56,181 +96,147 @@ public class DownloadSessionBuilder
 
         var userDepotKeys = LoadDepotKeys(_options.DepotKeysFile);
 
-        // ── Community manifests (always try first — avoids 401 for anon sessions) ──
-        Logger.Info("Fetching manifests from community sources...");
+        // Community sources first (may save a CDN round-trip)
+        Logger.Info("Checking community manifest sources...");
         var fetcher         = new ManifestSourceFetcher(_options.ApiKey);
         ManifestResult? communityResult = await fetcher.FetchAsync(_options.AppId);
 
-        // ── Depot list from PICS ──────────────────────────────────────────────
+        // Depot list from PICS
         List<uint> picsDepotIds;
         if (_options.DepotId.HasValue)
             picsDepotIds = new List<uint> { _options.DepotId.Value };
         else
             picsDepotIds = await GetDepotIdsForAppAsync(_options.AppId);
 
-        // FIX: ALWAYS merge community depot IDs with PICS depot IDs.
-        // The original code only used community IDs when PICS returned 0, meaning
-        // any depot in a community source but not in PICS (e.g. because the game
-        // filters it out by OS/arch/lang) was silently skipped.
-        // Now: start with PICS list, then ADD any community-only depots on top.
+        // Merge PICS + community depot IDs
         var allDepotIds = new HashSet<uint>(picsDepotIds);
         if (communityResult != null)
         {
-            int before = allDepotIds.Count;
+            int added = 0;
             foreach (var id in communityResult.Manifests.Keys)
-                allDepotIds.Add(id);
-            int added = allDepotIds.Count - before;
-            if (added > 0)
-                Logger.Info($"Added {added} community-only depot(s) not returned by PICS");
+                if (allDepotIds.Add(id)) added++;
+            if (added > 0) Logger.Info($"Added {added} community-only depot(s)");
         }
 
         if (allDepotIds.Count == 0)
             throw new Exception(
-                "Could not determine depot list. " +
-                "Try --depot <id> --manifest <id> --depot-keys keys.txt explicitly.");
+                "No depots found. Try --depot <id> --manifest <id> explicitly.");
 
-        Logger.Info($"Total depots to attempt: {allDepotIds.Count} " +
-                    $"(PICS: {picsDepotIds.Count}, " +
-                    $"community: {communityResult?.Manifests.Count ?? 0})");
+        Logger.Info($"Depots to process: {allDepotIds.Count}");
 
-        // ── Prepare each depot ────────────────────────────────────────────────
-        int prepared = 0;
+        // If manifest-only, just report and return empty session
+        if (_options.ManifestOnly)
+        {
+            Logger.Info("=== MANIFEST-ONLY MODE ===");
+            foreach (var depotId in allDepotIds)
+            {
+                ulong mid = 0;
+                if (communityResult?.Manifests.TryGetValue(depotId, out var cm) == true)
+                    mid = cm.ManifestId;
+                if (mid == 0) mid = await GetManifestIdFromPicsAsync(_options.AppId, depotId) ?? 0;
+                Logger.Info($"  Depot {depotId} → manifest {(mid == 0 ? "(not found)" : mid.ToString())}");
+            }
+            return session; // empty, no depots added
+        }
+
+        // Prepare each depot
         foreach (var depotId in allDepotIds)
         {
             var depot = await PrepareDepotAsync(
                 _options.AppId, depotId, _options.ManifestId,
                 userDepotKeys, communityResult);
-            if (depot != null)
-            {
-                session.Depots.Add(depot);
-                prepared++;
-            }
+            if (depot != null) session.Depots.Add(depot);
         }
 
         if (session.Depots.Count == 0)
             throw new Exception(
-                $"No downloadable depots found out of {allDepotIds.Count} tried. " +
-                "If this is a paid game: community sources may not have it yet, " +
-                "or try --username / --password to log in with your Steam account.");
+                $"No downloadable depots found from {allDepotIds.Count} tried. " +
+                "For paid games, try --username/--password or ensure community sources have it.");
 
-        Logger.Info($"Session ready: {session.Depots.Count}/{allDepotIds.Count} depot(s) prepared");
+        Logger.Info($"Session ready: {session.Depots.Count}/{allDepotIds.Count} depot(s)");
         return session;
     }
 
-    // ─── Single depot preparation ─────────────────────────────────────────────
+    // ─── Single depot ─────────────────────────────────────────────────────
 
     private async Task<DepotInfo?> PrepareDepotAsync(
         uint appId, uint depotId, ulong? forcedManifestId,
-        Dictionary<uint, byte[]> userDepotKeys,
-        ManifestResult? communityResult)
+        Dictionary<uint, byte[]> userDepotKeys, ManifestResult? communityResult)
     {
         try
         {
             Logger.Info($"Preparing depot {depotId}");
 
-            // ── 1. Depot key: user file > community source > Steam API ────────
+            // 1. Depot key
             byte[]? depotKey = null;
-
-            if (userDepotKeys.TryGetValue(depotId, out var provided))
-            {
-                depotKey = provided;
-                Logger.Debug($"Depot {depotId}: using user-provided key");
-            }
+            if (userDepotKeys.TryGetValue(depotId, out var uk))
+            { depotKey = uk; Logger.Debug($"Depot {depotId}: user-provided key"); }
             else if (communityResult?.DepotKeys.TryGetValue(depotId, out var ck) == true)
-            {
-                depotKey = ck;
-                Logger.Debug($"Depot {depotId}: using community key");
-            }
+            { depotKey = ck; Logger.Debug($"Depot {depotId}: community key"); }
             else
             {
                 depotKey = await _steam.GetDepotKeyAsync(depotId, appId);
                 if (depotKey == null)
-                    Logger.Debug($"Depot {depotId}: no key available " +
-                                 "(free/unencrypted depot, or anonymous access denied)");
+                    Logger.Debug($"Depot {depotId}: no key (free/anon depot or access denied)");
             }
 
-            // ── 2. Manifest ───────────────────────────────────────────────────
-
             // 2a. Local manifest file override
-            if (!string.IsNullOrEmpty(_options.ManifestFile) &&
-                File.Exists(_options.ManifestFile))
+            if (!string.IsNullOrEmpty(_options.ManifestFile) && File.Exists(_options.ManifestFile))
             {
-                Logger.Info($"Using local manifest file: {_options.ManifestFile}");
                 var local = ManifestParser.LoadFromFile(_options.ManifestFile, depotKey);
                 if (local != null)
                     return new DepotInfo
-                    {
-                        DepotId    = depotId, DepotName = $"Depot_{depotId}",
-                        DepotKey   = depotKey, ManifestId = 0, Files = local
-                    };
+                    { DepotId = depotId, DepotName = $"Depot_{depotId}",
+                      DepotKey = depotKey, ManifestId = 0, Files = local };
             }
 
-            // 2b. Community binary manifest — parse directly (no CDN needed)
-            if (communityResult?.Manifests.TryGetValue(depotId, out var cm) == true
-                && cm.Data != null)
+            // 2b. Community binary manifest
+            if (communityResult?.Manifests.TryGetValue(depotId, out var cm) == true && cm.Data != null)
             {
-                Logger.Info($"Depot {depotId}: parsing community manifest " +
-                            $"({cm.Data.Length:N0} bytes)");
+                Logger.Info($"Depot {depotId}: using community manifest binary ({cm.Data.Length:N0} bytes)");
                 try
                 {
                     var dm = SteamKit2.DepotManifest.Deserialize(cm.Data);
                     if (depotKey != null) dm.DecryptFilenames(depotKey);
                     return new DepotInfo
-                    {
-                        DepotId    = depotId,
-                        DepotName  = $"Depot_{depotId}",
-                        DepotKey   = depotKey,
-                        ManifestId = cm.ManifestId,
-                        Files      = ManifestParser.FromDepotManifest(dm)
-                    };
+                    { DepotId = depotId, DepotName = $"Depot_{depotId}",
+                      DepotKey = depotKey, ManifestId = cm.ManifestId,
+                      Files = ManifestParser.FromDepotManifest(dm) };
                 }
                 catch (Exception ex)
-                {
-                    Logger.Warn($"Depot {depotId}: community manifest parse failed " +
-                                $"({ex.Message}), falling back to CDN");
-                }
+                { Logger.Warn($"Depot {depotId}: community manifest parse failed ({ex.Message}) — CDN fallback"); }
             }
 
-            // 2c. Resolve manifest ID: explicit flag > community ID > PICS
+            // 2c. Resolve manifest ID
             ulong manifestId = forcedManifestId ?? 0;
-
-            if (manifestId == 0 &&
-                communityResult?.Manifests.TryGetValue(depotId, out var cme) == true)
+            if (manifestId == 0 && communityResult?.Manifests.TryGetValue(depotId, out var cme) == true)
                 manifestId = cme.ManifestId;
-
             if (manifestId == 0)
                 manifestId = await GetManifestIdFromPicsAsync(appId, depotId) ?? 0;
 
             if (manifestId == 0)
             {
-                Logger.Warn($"Depot {depotId}: no manifest ID found — skipping. " +
-                            "(Community sources don't have this depot yet.)");
+                Logger.Warn($"Depot {depotId}: no manifest ID — skipping");
                 return null;
             }
 
-            // 2d. CDN manifest download (requires ownership for paid games)
-            Logger.Info($"Depot {depotId}: downloading manifest {manifestId} from CDN...");
+            // 2d. CDN manifest
+            Logger.Info($"Depot {depotId}: fetching manifest {manifestId} from CDN...");
             var manifest = await _steam.DownloadManifestAsync(
                 appId, depotId, manifestId, depotKey,
                 _options.Branch ?? "public", _options.BranchPassword);
 
             if (manifest == null)
             {
-                Logger.Error(
-                    $"Depot {depotId}: CDN manifest download failed. " +
-                    "For paid games, community sources must have the manifest binary, " +
-                    "OR use --username / --password to log in with your Steam account.");
+                Logger.Error($"Depot {depotId}: CDN manifest download failed. " +
+                             "Log in with --username/--password for paid games.");
                 return null;
             }
 
             return new DepotInfo
-            {
-                DepotId    = depotId,
-                DepotName  = $"Depot_{depotId}",
-                DepotKey   = depotKey,
-                ManifestId = manifestId,
-                Files      = ManifestParser.FromDepotManifest(manifest)
-            };
+            { DepotId = depotId, DepotName = $"Depot_{depotId}",
+              DepotKey = depotKey, ManifestId = manifestId,
+              Files = ManifestParser.FromDepotManifest(manifest) };
         }
         catch (Exception ex)
         {
@@ -239,7 +245,7 @@ public class DownloadSessionBuilder
         }
     }
 
-    // ─── PICS ─────────────────────────────────────────────────────────────────
+    // ─── PICS helpers ─────────────────────────────────────────────────────
 
     private async Task<ulong?> GetManifestIdFromPicsAsync(uint appId, uint depotId)
     {
@@ -267,10 +273,7 @@ public class DownloadSessionBuilder
                 }
             }
         }
-        catch (Exception ex)
-        {
-            Logger.Warn($"PICS manifest lookup depot {depotId}: {ex.Message}");
-        }
+        catch (Exception ex) { Logger.Warn($"PICS manifest lookup depot {depotId}: {ex.Message}"); }
         return null;
     }
 
@@ -294,8 +297,7 @@ public class DownloadSessionBuilder
                 {
                     var os = depot["config"]["oslist"].Value;
                     if (!string.IsNullOrEmpty(os) &&
-                        !os.Contains(_options.Os, StringComparison.OrdinalIgnoreCase))
-                        continue;
+                        !os.Contains(_options.Os, StringComparison.OrdinalIgnoreCase)) continue;
                 }
                 if (!_options.AllArchs)
                 {
@@ -309,6 +311,11 @@ public class DownloadSessionBuilder
                         !lang.Equals(_options.Language, StringComparison.OrdinalIgnoreCase) &&
                         !lang.Equals("english", StringComparison.OrdinalIgnoreCase)) continue;
                 }
+                if (_options.LowViolence)
+                {
+                    var lv = depot["config"]["lowviolence"].Value;
+                    if (string.IsNullOrEmpty(lv) || lv != "1") continue;
+                }
                 ids.Add(depotId);
             }
             Logger.Info($"PICS: {ids.Count} depot(s) for app {appId}");
@@ -317,7 +324,7 @@ public class DownloadSessionBuilder
         return ids;
     }
 
-    // ─── Depot key file loader ─────────────────────────────────────────────────
+    // ─── Depot key file ────────────────────────────────────────────────────
 
     private static Dictionary<uint, byte[]> LoadDepotKeys(string? path)
     {
@@ -334,7 +341,7 @@ public class DownloadSessionBuilder
                 if (parts.Length < 2 || !uint.TryParse(parts[0], out var id)) continue;
                 keys[id] = Convert.FromHexString(parts[1].Replace(" ", "").Replace("-", ""));
             }
-            Logger.Info($"Loaded {keys.Count} depot key(s)");
+            Logger.Info($"Loaded {keys.Count} depot key(s) from file");
         }
         catch (Exception ex) { Logger.Warn($"LoadDepotKeys: {ex.Message}"); }
         return keys;

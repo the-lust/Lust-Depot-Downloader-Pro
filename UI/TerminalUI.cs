@@ -1,136 +1,92 @@
 using Spectre.Console;
 using LustsDepotDownloaderPro.Core;
+using LustsDepotDownloaderPro.Utils;
 
 namespace LustsDepotDownloaderPro.UI;
 
+/// <summary>
+/// Spectre.Console interactive terminal UI.
+/// ONLY instantiated when --terminal-ui true (default for direct CLI use).
+/// When invoked from the Electron GUI, --terminal-ui false skips this class
+/// entirely so the plain-text progress reporter in Program.cs handles stdout.
+/// </summary>
 public class TerminalUI
 {
-    private ProgressTask? _mainProgress;
-    private ProgressTask? _speedProgress;
-
     public void ShowHeader()
     {
-        var rule = new Rule("[bold cyan]Lusts Depot Downloader Pro[/]")
-        {
-            Justification = Justify.Center
-        };
-        
-        AnsiConsole.Write(rule);
-        AnsiConsole.WriteLine();
-        
-        var panel = new Panel(
-            "[bold]Features:[/]\n" +
-            "  ✓ Multi-threaded downloading\n" +
-            "  ✓ Pause/Resume support\n" +
-            "  ✓ CDN failover\n" +
-            "  ✓ Manifest & key support\n" +
-            "  ✓ Workshop items\n" +
-            "  ✓ Progress tracking")
-        {
-            Header = new PanelHeader("[bold yellow]⚡ Welcome[/]"),
-            Border = BoxBorder.Rounded,
-            BorderStyle = new Style(Color.Cyan1)
-        };
-        
-        AnsiConsole.Write(panel);
+        AnsiConsole.Write(new Rule("[bold cyan]Lusts Depot Downloader Pro v1.0.0[/]")
+            { Justification = Justify.Center });
         AnsiConsole.WriteLine();
     }
 
-    public void ShowStatus(string message)
-    {
-        AnsiConsole.MarkupLine($"[cyan]ℹ️  {message}[/]");
-    }
+    public void ShowStatus(string message) =>
+        AnsiConsole.MarkupLine($"[cyan]ℹ  {EscapeMarkup(message)}[/]");
 
     public async Task RunDownloadWithProgressAsync(DownloadEngine engine)
     {
-        await AnsiConsole.Progress()
-            .Columns(new ProgressColumn[]
-            {
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new PercentageColumn(),
-                new RemainingTimeColumn(),
-                new SpinnerColumn(),
-            })
-            .StartAsync(async ctx =>
-            {
-                _mainProgress = ctx.AddTask("[cyan]Downloading[/]", maxValue: 100);
-                _speedProgress = ctx.AddTask("[yellow]Speed[/]", maxValue: 100);
-
-                // Subscribe to progress events
-                engine.ProgressChanged += (s, e) =>
+        try
+        {
+            await AnsiConsole.Progress()
+                .AutoClear(false)
+                .HideCompleted(false)
+                .Columns(
+                    new TaskDescriptionColumn(),
+                    new ProgressBarColumn(),
+                    new PercentageColumn(),
+                    new RemainingTimeColumn(),
+                    new SpinnerColumn())
+                .StartAsync(async ctx =>
                 {
-                    if (_mainProgress != null)
+                    var dlTask    = ctx.AddTask("[cyan]Downloading[/]",    maxValue: 100);
+                    var speedTask = ctx.AddTask("[yellow]Speed[/]",        maxValue: 1, autoStart: false);
+                    speedTask.IsIndeterminate = true;
+
+                    engine.ProgressChanged += (_, e) =>
                     {
-                        _mainProgress.Value = e.PercentComplete;
-                        _mainProgress.Description = $"[cyan]Downloading {e.CurrentFile ?? "..."}[/]";
-                    }
+                        dlTask.Value       = e.PercentComplete;
+                        dlTask.Description = $"[cyan]Downloading {EscapeMarkup(e.CurrentFile ?? "...")}[/]";
+                        speedTask.Description = $"[yellow]Speed: {e.SpeedMBps:F2} MB/s" +
+                            (e.EtaSeconds > 0 ? $"  ETA {FormatEta(e.EtaSeconds)}" : "") + "[/]";
+                    };
 
-                    if (_speedProgress != null)
-                    {
-                        _speedProgress.Description = $"[yellow]Speed: {e.SpeedMBps:F2} MB/s[/]";
-                    }
-                };
+                    await engine.RunAsync();
 
-                // Run download
-                await engine.RunAsync();
-
-                if (_mainProgress != null)
-                {
-                    _mainProgress.Value = 100;
-                    _mainProgress.StopTask();
-                }
-
-                if (_speedProgress != null)
-                {
-                    _speedProgress.StopTask();
-                }
-            });
+                    dlTask.Value = 100;
+                    dlTask.StopTask();
+                    speedTask.StopTask();
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            // User pressed Ctrl+C - this is expected, don't re-throw
+            // The engine has already saved the checkpoint
+        }
     }
 
     public void ShowSummary(Models.DownloadStatistics stats)
     {
-        var table = new Table()
+        var t = new Table()
             .Border(TableBorder.Rounded)
             .BorderColor(Color.Cyan1)
-            .AddColumn(new TableColumn("[bold]Metric[/]").Centered())
-            .AddColumn(new TableColumn("[bold]Value[/]").Centered());
+            .AddColumn("Metric").AddColumn("Value");
 
-        table.AddRow("Downloaded", $"[green]{stats.DownloadedMB:F2} MB[/]");
-        table.AddRow("Total", $"{stats.TotalMB:F2} MB");
-        table.AddRow("Progress", $"[cyan]{stats.Percent:F2}%[/]");
-        table.AddRow("Speed", $"[yellow]{stats.SpeedMBps:F2} MB/s[/]");
-        table.AddRow("Chunks", $"{stats.CompletedChunks} / {stats.TotalChunks}");
-        table.AddRow("Status", stats.IsCompleted ? "[green]✓ Completed[/]" : stats.IsPaused ? "[yellow]⏸️  Paused[/]" : "[cyan]Running[/]");
-
-        AnsiConsole.Write(table);
+        t.AddRow("Downloaded",  $"[green]{stats.DownloadedMB:F2} MB[/]");
+        t.AddRow("Total",       $"{stats.TotalMB:F2} MB");
+        t.AddRow("Progress",    $"[cyan]{stats.Percent:F1}%[/]");
+        t.AddRow("Speed",       $"[yellow]{stats.SpeedMBps:F2} MB/s[/]");
+        t.AddRow("Chunks",      $"{stats.CompletedChunks}/{stats.TotalChunks}");
+        t.AddRow("Status",      stats.IsCompleted ? "[green]✓ Complete[/]" :
+                                stats.IsPaused    ? "[yellow]⏸  Paused[/]" : "[cyan]Running[/]");
+        AnsiConsole.Write(t);
     }
 
-    public string PromptForInput(string message, string? defaultValue = null)
+    private static string FormatEta(double sec)
     {
-        if (defaultValue != null)
-        {
-            return AnsiConsole.Prompt(
-                new TextPrompt<string>($"[cyan]{message}[/]")
-                    .DefaultValue(defaultValue));
-        }
-        else
-        {
-            return AnsiConsole.Prompt(
-                new TextPrompt<string>($"[cyan]{message}[/]"));
-        }
+        if (sec <= 0) return "--:--:--";
+        var t = TimeSpan.FromSeconds(sec);
+        return $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
     }
 
-    public bool PromptForConfirmation(string message)
-    {
-        return AnsiConsole.Confirm($"[yellow]{message}[/]");
-    }
-
-    public T PromptForChoice<T>(string message, params T[] choices) where T : notnull
-    {
-        return AnsiConsole.Prompt(
-            new SelectionPrompt<T>()
-                .Title($"[cyan]{message}[/]")
-                .AddChoices(choices));
-    }
+    private static string EscapeMarkup(string s) =>
+        s.Replace("[", "[[").Replace("]", "]]");
 }
