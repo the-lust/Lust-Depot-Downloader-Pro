@@ -568,4 +568,6 @@ This tool downloads content directly from Steam's CDN. Always comply with:
 - Steam Terms of Service  
 - Local laws regarding software licensing
 
-**The developers are not responsible for misuse of this software.**
+**I am not responsible for misuse of this software.**
+
+*Do note that abuse of this software, or owning it without my proper permission, is not allowed, nor selling or any kind of profit made related the use of it, can result in serious consequences!*
