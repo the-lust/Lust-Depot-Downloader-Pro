@@ -549,7 +549,7 @@ await process.WaitForExitAsync();
 
 <div align="center">
 
-*Made with ❤️ by The Lust — Version 1.0.0 — March 2026*
+*Made with ❤️ by The Lust — Version 2.1 — March 2026*
 
 *Built on [SteamKit2](https://github.com/SteamRE/SteamKit)*
 
