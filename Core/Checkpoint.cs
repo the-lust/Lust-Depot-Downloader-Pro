@@ -7,7 +7,11 @@ public class Checkpoint
 {
     private readonly string _checkpointPath;
     private readonly ConcurrentHashSet<string> _completedChunks = new();
-    private int _chunksSinceLastSave = 0;
+
+    // Time-based throttle: save at most once every 30 seconds
+    private DateTime _lastSaveTime = DateTime.MinValue;
+    private readonly TimeSpan _saveInterval = TimeSpan.FromSeconds(30);
+    private readonly object _saveLock = new();
 
     public HashSet<string> CompletedChunks => _completedChunks.ToHashSet();
     public string FilePath => _checkpointPath;
@@ -34,16 +38,42 @@ public class Checkpoint
     public void MarkChunkComplete(string chunkId)
     {
         _completedChunks.Add(chunkId);
-        if (Interlocked.Increment(ref _chunksSinceLastSave) % 100 == 0) Save();
+        MaybeSave();
     }
 
     public bool IsChunkComplete(string chunkId) => _completedChunks.Contains(chunkId);
 
+    /// <summary>
+    /// Time-throttled auto-save: writes to disk at most once every 30 seconds.
+    /// Call this after every completed chunk; it's cheap when the interval hasn't elapsed.
+    /// </summary>
+    private void MaybeSave()
+    {
+        if (DateTime.UtcNow - _lastSaveTime < _saveInterval) return;
+        lock (_saveLock)
+        {
+            // Double-check after acquiring lock
+            if (DateTime.UtcNow - _lastSaveTime < _saveInterval) return;
+            SaveInternal();
+            _lastSaveTime = DateTime.UtcNow;
+        }
+    }
+
+    /// <summary>Force-save regardless of throttle (called on pause/cancel).</summary>
     public void Save()
+    {
+        lock (_saveLock)
+        {
+            SaveInternal();
+            _lastSaveTime = DateTime.UtcNow;
+        }
+    }
+
+    private void SaveInternal()
     {
         try
         {
-            var dir = System.IO.Path.GetDirectoryName(_checkpointPath);
+            var dir = Path.GetDirectoryName(_checkpointPath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
             var tmp = _checkpointPath + ".tmp";
@@ -54,8 +84,8 @@ public class Checkpoint
             }, Formatting.Indented));
             File.Move(tmp, _checkpointPath, overwrite: true);
 
-            // MUST be Logger.Info with path — GUI stdout parser reads: "Checkpoint saved: <path>"
-            Utils.Logger.Info($"Checkpoint saved: {_checkpointPath}");
+            // Debug level — not Info — so it never spams the console
+            Utils.Logger.Debug($"Checkpoint saved: {_completedChunks.Count} chunks → {_checkpointPath}");
         }
         catch (Exception ex) { Utils.Logger.Error($"Failed to save checkpoint: {ex.Message}"); }
     }
@@ -70,8 +100,8 @@ public class Checkpoint
 public class ConcurrentHashSet<T> where T : notnull
 {
     private readonly ConcurrentDictionary<T, byte> _d = new();
-    public void Add(T i)       => _d.TryAdd(i, 0);
-    public bool Contains(T i)  => _d.ContainsKey(i);
+    public void Add(T i)      => _d.TryAdd(i, 0);
+    public bool Contains(T i) => _d.ContainsKey(i);
     public HashSet<T> ToHashSet() => _d.Keys.ToHashSet();
-    public int Count           => _d.Count;
+    public int Count          => _d.Count;
 }

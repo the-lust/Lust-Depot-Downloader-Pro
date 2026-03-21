@@ -8,6 +8,7 @@ if errorlevel 1 ( echo ERROR: .NET 8 SDK not found. & pause & exit /b 1 )
 dotnet restore
 dotnet publish -c Release -r win-x86 --self-contained true ^
     /p:PublishSingleFile=true ^
+    /p:EnableCompressionInSingleFile=true ^
     /p:IncludeNativeLibrariesForSelfExtract=true ^
     /p:PublishReadyToRun=true ^
     /p:DebugType=none ^

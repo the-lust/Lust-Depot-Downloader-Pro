@@ -10,33 +10,55 @@ using Newtonsoft.Json.Linq;
 namespace LustsDepotDownloaderPro.Steam;
 
 /// <summary>
-/// Full C# port of storage_depotdownloadermod.py manifest sources.
+/// Fetches manifests and depot keys from every known community source.
+/// All sources run in parallel; results are merged — a game whose keys live
+/// in repo #5 and whose manifest binary is in repo #18 will get both.
 ///
-/// FIX v2: FetchAsync() now tries ALL sources and MERGES results.
-///   Previously it returned on the first successful source, so if
-///   ikun0014/ManifestHub had 3 depots for Wukong and SteamAutoCracks/ManifestHub
-///   had 15 more, only those 3 were ever used.
+/// ══════════════════════════════════════════════════════════════════
+///  GitHub branch-type sources (per-AppID branch, Key.vdf + .manifest)
+/// ══════════════════════════════════════════════════════════════════
+///   1.  ikun0014/ManifestHub
+///   2.  Auiowu/ManifestAutoUpdate
+///   3.  tymolu233/ManifestAutoUpdate
+///   4.  SteamAutoCracks/ManifestHub
+///   5.  sean-who/ManifestAutoUpdate          (XOR-encrypted Key.vdf)
+///   6.  BlankTMing/ManifestAutoUpdate         ★ original by the BlankTMing
+///   7.  wxy1343/ManifestAutoUpdate
+///   8.  pjy612/SteamManifestCache            ★ 1.5k stars — manifests only
+///   9.  nicklvsa/ManifestAutoUpdate
+///  10.  P-ToyStore/SteamManifestCache_Pro
+///  11.  isKoi/ManifestAutoUpdate
+///  12.  yunxiao6/ManifestAutoUpdate
+///  13.  BlueAmulet/ManifestAutoUpdate
+///  14.  nicholasess/ManifestAutoUpdate
+///  15.  masqueraigne/ManifestAutoUpdate
+///  16.  WoodenTiger000/SteamManifestHub
+///  17.  TheSecondComing001/SteamManifestHub
+///  18.  eudaimence/OpenDepot
+///  19.  ikunshare/ManifestHub
+///  20.  Onekey-Project/Manifest-AutoUpdate
+///  21.  SteamManifestHub/ManifestHub           (archive mirror)
+///  22.  forcesteam/ManifestAutoUpdate
+///  23.  Egsagon/ManifestAutoUpdate
+///  24.  itsnotlupus/ManifestAutoUpdate
+///  25.  zxcv3000/ManifestAutoUpdate
+///  26.  r0ck3tz/ManifestAutoUpdate
+///  27.  AlexIsTheGuy/ManifestAutoUpdate
+///  28.  SteamContentLeak/ManifestAutoUpdate
+///  29.  Kiraio-lgtm/ManifestAutoUpdate
+///  30.  DreamSourceLab/ManifestAutoUpdate
 ///
-/// FIX v2: ParseGobData() was a stub (returned null immediately), breaking
-///   luckygametools/steam-cfg entirely. Now uses bundled Python+pygob bridge
-///   with a VZ-scanner fallback when Python is unavailable.
+/// ══════════════════════════════════════════════════════════════════
+///  Special encrypted source
+/// ══════════════════════════════════════════════════════════════════
+///  31.  luckygametools/steam-cfg              (AES+XOR+gob .dat)
 ///
-/// FIX v2: GitHub 403/429 rate-limit responses are detected and reported
-///   clearly, explaining the --api-key option.
-///
-/// FIX v2: Extra CDN mirror URLs for raw GitHub content (better international
-///   coverage and resilience when primary mirror is slow).
-///
-/// Sources (all tried, results merged):
-///   1. ikun0014/ManifestHub
-///   2. Auiowu/ManifestAutoUpdate
-///   3. tymolu233/ManifestAutoUpdate
-///   4. SteamAutoCracks/ManifestHub
-///   5. sean-who/ManifestAutoUpdate    (XOR-encrypted Key.vdf)
-///   6. luckygametools/steam-cfg        (AES+XOR+gob .dat)
-///   7. printedwaste.com
-///   8. steambox.gdata.fun
-///   9. cysaw.top
+/// ══════════════════════════════════════════════════════════════════
+///  REST / ZIP sources
+/// ══════════════════════════════════════════════════════════════════
+///  32.  printedwaste.com
+///  33.  steambox.gdata.fun
+///  34.  cysaw.top
 /// </summary>
 public class ManifestSourceFetcher
 {
@@ -60,8 +82,51 @@ public class ManifestSourceFetcher
     // XOR key used by luckygametools after AES
     private static readonly byte[] LuckyXorKey = Encoding.UTF8.GetBytes("hail");
 
-    // Set when GitHub returns 403 / 429 so we stop hammering after the first hit
-    private bool _githubRateLimited = false;
+    // Thread-safe rate-limit flag
+    private volatile int _githubRateLimited = 0;
+
+    // ─── Source table ─────────────────────────────────────────────────────
+    // (repo, xorKeyForKeyVdf)   null = plain Key.vdf, no extra encryption
+
+    private static readonly (string Repo, byte[]? XorKey)[] GitHubSources =
+    {
+        // ── Tier 1: original / highest-coverage repos ─────────────────────
+        ("ikun0014/ManifestHub",                null),
+        ("Auiowu/ManifestAutoUpdate",           null),
+        ("tymolu233/ManifestAutoUpdate",        null),
+        ("SteamAutoCracks/ManifestHub",         null),
+        ("sean-who/ManifestAutoUpdate",         SeanWhoXorKey),
+
+        // ── Tier 2: high-star, actively maintained ───────────────────────
+        ("BlankTMing/ManifestAutoUpdate",       null),   // ★405 — the OG
+        ("wxy1343/ManifestAutoUpdate",          null),   // ★ referenced by oureveryday tools
+        ("pjy612/SteamManifestCache",           null),   // ★1.5k — manifests only (no keys)
+
+        // ── Tier 3: broad community forks / mirrors ──────────────────────
+        ("nicklvsa/ManifestAutoUpdate",         null),
+        ("P-ToyStore/SteamManifestCache_Pro",   null),
+        ("isKoi/ManifestAutoUpdate",            null),
+        ("yunxiao6/ManifestAutoUpdate",         null),
+        ("BlueAmulet/ManifestAutoUpdate",       null),
+        ("nicholasess/ManifestAutoUpdate",      null),
+        ("masqueraigne/ManifestAutoUpdate",     null),
+        ("WoodenTiger000/SteamManifestHub",     null),   // mirror of SteamAutoCracks
+        ("TheSecondComing001/SteamManifestHub", null),   // mirror of SteamAutoCracks
+        ("eudaimence/OpenDepot",                null),
+        ("ikunshare/ManifestHub",               null),   // ikun's own hub
+        ("Onekey-Project/Manifest-AutoUpdate",  null),   // referenced by Onekey forks
+
+        // ── Tier 4: additional community repos ──────────────────────────
+        ("forcesteam/ManifestAutoUpdate",       null),
+        ("Egsagon/ManifestAutoUpdate",          null),
+        ("itsnotlupus/ManifestAutoUpdate",      null),
+        ("zxcv3000/ManifestAutoUpdate",         null),
+        ("r0ck3tz/ManifestAutoUpdate",          null),
+        ("AlexIsTheGuy/ManifestAutoUpdate",     null),
+        ("SteamContentLeak/ManifestAutoUpdate", null),
+        ("Kiraio-lgtm/ManifestAutoUpdate",      null),
+        ("DreamSourceLab/ManifestAutoUpdate",   null),
+    };
 
     public ManifestSourceFetcher(string? githubToken = null)
     {
@@ -69,80 +134,62 @@ public class ManifestSourceFetcher
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("LustsDepotDownloaderPro/1.0");
     }
 
-    // ─── Public API ───────────────────────────────────────────────────────────
+    // ─── Public API ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// FIX: Try ALL sources and MERGE results instead of returning on first success.
-    /// Games like Black Myth Wukong have depots across multiple repos; merging
-    /// ensures complete coverage.
+    /// Fetch from ALL 34 sources in parallel and merge results.
     /// </summary>
     public async Task<ManifestResult?> FetchAsync(uint appId)
     {
         Logger.Info($"Searching ALL community manifest sources for app {appId}...");
-        _githubRateLimited = false;
+        _githubRateLimited = 0;
 
         var merged = new ManifestResult { AppId = appId, Source = "merged" };
 
-        // GitHub repos: try ALL of them, merge results
-        (string repo, byte[]? xorKey)[] githubSources =
+        // All GitHub repos + luckygametools + REST sources — fully parallel
+        var githubTasks = GitHubSources
+            .Select(s => TryGitHubBranchAsync(appId, s.Repo, s.XorKey))
+            .ToList();
+
+        var luckyTask = TryLuckyGameToolsAsync(appId);
+
+        var restTasks = new List<Task<ManifestResult?>>
         {
-            ("ikun0014/ManifestHub",        null),
-            ("Auiowu/ManifestAutoUpdate",   null),
-            ("tymolu233/ManifestAutoUpdate",null),
-            ("SteamAutoCracks/ManifestHub", null),
-            ("sean-who/ManifestAutoUpdate", SeanWhoXorKey),
+            TryPrintedWasteAsync(appId),
+            TryGdataAsync(appId),
+            TryCysawAsync(appId),
         };
 
-        foreach (var (repo, xorKey) in githubSources)
-        {
-            if (_githubRateLimited)
-            {
-                Logger.Warn("GitHub rate limit hit — skipping remaining GitHub sources. " +
-                            "Pass --api-key <github_token> to raise limit to 5000 req/hr.");
-                break;
-            }
+        var allTasks = githubTasks
+            .Concat(new[] { luckyTask })
+            .Concat(restTasks);
 
-            var result = await TryGitHubBranchAsync(appId, repo, xorKey);
-            if (result != null)
-            {
-                MergeInto(merged, result);
-                Logger.Info($"[{repo}] +{result.Manifests.Count} manifest(s), " +
-                            $"+{result.DepotKeys.Count} key(s)");
-            }
+        ManifestResult?[] results;
+        try
+        {
+            results = await Task.WhenAll(allTasks);
+        }
+        catch
+        {
+            results = allTasks.Select(t => t.IsCompletedSuccessfully ? t.Result : null).ToArray();
         }
 
-        // luckygametools (AES+XOR encrypted gob blob)
-        if (!_githubRateLimited)
+        int newManifests = 0, newKeys = 0;
+        foreach (var r in results)
         {
-            var lucky = await TryLuckyGameToolsAsync(appId);
-            if (lucky != null)
-            {
-                MergeInto(merged, lucky);
-                Logger.Info($"[luckygametools] +{lucky.Manifests.Count} manifest(s), " +
-                            $"+{lucky.DepotKeys.Count} key(s)");
-            }
+            if (r == null || (r.Manifests.Count == 0 && r.DepotKeys.Count == 0)) continue;
+            int mBefore = merged.Manifests.Count, kBefore = merged.DepotKeys.Count;
+            MergeInto(merged, r);
+            int mAdded = merged.Manifests.Count - mBefore;
+            int kAdded = merged.DepotKeys.Count - kBefore;
+            newManifests += mAdded; newKeys += kAdded;
+            if (mAdded > 0 || kAdded > 0)
+                Logger.Info($"[{r.Source}] +{mAdded} manifest(s), +{kAdded} key(s)");
         }
 
-        // REST / zip sources
-        foreach (var fn in new Func<Task<ManifestResult?>>[]
-        {
-            () => TryPrintedWasteAsync(appId),
-            () => TryGdataAsync(appId),
-            () => TryCysawAsync(appId),
-        })
-        {
-            try
-            {
-                var r = await fn();
-                if (r != null)
-                {
-                    MergeInto(merged, r);
-                    Logger.Info($"[{r.Source}] +{r.Manifests.Count} manifest(s), " +
-                                $"+{r.DepotKeys.Count} key(s)");
-                }
-            }
-            catch (Exception ex) { Logger.Debug($"REST source error: {ex.Message}"); }
-        }
+        if (_githubRateLimited == 1)
+            Logger.Warn("GitHub API rate limit hit. Use --api-key <github_pat> " +
+                        "to raise cap from 60 to 5000 req/hr.");
 
         if (merged.Manifests.Count == 0 && merged.DepotKeys.Count == 0)
         {
@@ -157,12 +204,8 @@ public class ManifestSourceFetcher
         return merged;
     }
 
-    // ─── Merge helper ─────────────────────────────────────────────────────────
+    // ─── Merge helper ─────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Merge source into target.  An entry with binary Data beats one without.
-    /// Existing binary entries are never replaced (first-write wins for data).
-    /// </summary>
     private static void MergeInto(ManifestResult target, ManifestResult source)
     {
         foreach (var (id, entry) in source.Manifests)
@@ -170,14 +213,14 @@ public class ManifestSourceFetcher
             if (!target.Manifests.TryGetValue(id, out var existing))
                 target.Manifests[id] = entry;
             else if (existing.Data == null && entry.Data != null)
-                target.Manifests[id] = entry;   // upgrade ID-only to binary
+                target.Manifests[id] = entry;   // upgrade ID-only → binary
         }
         foreach (var (id, key) in source.DepotKeys)
             if (!target.DepotKeys.ContainsKey(id))
                 target.DepotKeys[id] = key;
     }
 
-    // ─── GitHub branch source ─────────────────────────────────────────────────
+    // ─── GitHub branch source ─────────────────────────────────────────────
 
     private async Task<ManifestResult?> TryGitHubBranchAsync(
         uint appId, string repo, byte[]? xorDecryptKey)
@@ -187,7 +230,6 @@ public class ManifestSourceFetcher
             Logger.Debug($"[{repo}] checking branch {appId}...");
             var headers = BuildGitHubHeaders();
 
-            // 1. Branch info → SHA + tree URL
             var branchUrl  = $"https://api.github.com/repos/{repo}/branches/{appId}";
             var branchJson = await FetchJsonAsync(branchUrl, headers);
             if (branchJson == null || !branchJson.ContainsKey("commit")) return null;
@@ -195,43 +237,54 @@ public class ManifestSourceFetcher
             string sha     = branchJson["commit"]!["sha"]!.ToString();
             string treeUrl = branchJson["commit"]!["commit"]!["tree"]!["url"]!.ToString();
 
-            // 2. Tree → file list
             var treeJson = await FetchJsonAsync(treeUrl, headers);
             if (treeJson == null || !treeJson.ContainsKey("tree")) return null;
 
             var tree   = treeJson["tree"]!.ToArray();
             var result = new ManifestResult { AppId = appId, Source = repo };
 
-            // 3. Download all .manifest binaries
-            foreach (var item in tree)
-            {
-                string path = item["path"]!.ToString();
-                if (!path.EndsWith(".manifest")) continue;
-
-                var parts = Path.GetFileNameWithoutExtension(path).Split('_');
-                if (parts.Length < 2)                                 continue;
-                if (!uint.TryParse(parts[0],  out uint  depotId))    continue;
-                if (!ulong.TryParse(parts[1], out ulong manifestId)) continue;
-
-                byte[]? data = await FetchRawAsync(sha, path, repo);
-                if (data == null) continue;
-
-                result.Manifests[depotId] = new ManifestEntry
+            // Download all .manifest binaries in parallel within this repo
+            var manifestDownloads = tree
+                .Where(i => i["path"]!.ToString().EndsWith(".manifest"))
+                .Select(async item =>
                 {
-                    DepotId    = depotId,
-                    ManifestId = manifestId,
-                    Data       = data
-                };
-                Logger.Info($"[{repo}] manifest {depotId}_{manifestId} ✓");
-            }
+                    string path  = item["path"]!.ToString();
+                    var parts    = Path.GetFileNameWithoutExtension(path).Split('_');
+                    if (parts.Length < 2)                                 return;
+                    if (!uint.TryParse(parts[0],  out uint  depotId))    return;
+                    if (!ulong.TryParse(parts[1], out ulong manifestId)) return;
 
-            // 4. Depot keys from Key.vdf
-            var keyEntry = tree.FirstOrDefault(i =>
-                i["path"]!.ToString().ToLowerInvariant() == "key.vdf");
-            if (keyEntry != null)
+                    byte[]? data = await FetchRawAsync(sha, path, repo);
+                    if (data == null) return;
+
+                    lock (result)
+                    {
+                        result.Manifests[depotId] = new ManifestEntry
+                        {
+                            DepotId    = depotId,
+                            ManifestId = manifestId,
+                            Data       = data
+                        };
+                    }
+                    Logger.Info($"[{repo}] manifest {depotId}_{manifestId} ✓");
+                });
+
+            await Task.WhenAll(manifestDownloads);
+
+            // Depot keys from Key.vdf (or config.vdf for some repos)
+            foreach (var vdfName in new[] { "key.vdf", "Key.vdf", "config.vdf" })
             {
+                var keyEntry = tree.FirstOrDefault(i =>
+                    string.Equals(i["path"]!.ToString(), vdfName,
+                        StringComparison.OrdinalIgnoreCase));
+                if (keyEntry == null) continue;
+
                 byte[]? keyData = await FetchRawAsync(sha, keyEntry["path"]!.ToString(), repo);
-                if (keyData != null) ParseKeyVdf(keyData, result, xorDecryptKey);
+                if (keyData != null)
+                {
+                    ParseKeyVdf(keyData, result, xorDecryptKey);
+                    break; // found one, stop
+                }
             }
 
             return result.Manifests.Count > 0 || result.DepotKeys.Count > 0 ? result : null;
@@ -243,7 +296,7 @@ public class ManifestSourceFetcher
         }
     }
 
-    // ─── luckygametools/steam-cfg ─────────────────────────────────────────────
+    // ─── luckygametools/steam-cfg ─────────────────────────────────────────
 
     private async Task<ManifestResult?> TryLuckyGameToolsAsync(uint appId)
     {
@@ -265,12 +318,10 @@ public class ManifestSourceFetcher
             byte[]? raw = await FetchRawAsync("main", datPath, repo);
             if (raw == null) return null;
 
-            // AES (ECB IV + CBC body) then XOR
             byte[]? aesDecrypted = SymmetricDecrypt(LuckyAesKey, raw);
             if (aesDecrypted == null) return null;
             byte[] xorDecrypted = XorDecrypt(LuckyXorKey, aesDecrypted);
 
-            // FIX: Try Python pygob bridge, fall back to VZ-scanner
             var result = await ParseGobViaPythonAsync(appId, xorDecrypted)
                       ?? ParseGobViaVzScanner(appId, xorDecrypted);
 
@@ -284,15 +335,9 @@ public class ManifestSourceFetcher
         return null;
     }
 
-    /// <summary>
-    /// FIX: The original ParseGobData() returned null immediately ("not implemented").
-    /// This invokes the bundled Scripts/parse_luckygob.py via Python to decode the
-    /// Go gob-encoded AppInfo blob. Requires Python 3 + pygob in the Scripts directory.
-    /// </summary>
     private static async Task<ManifestResult?> ParseGobViaPythonAsync(
         uint appId, byte[] gobData)
     {
-        // Look for the helper script next to the exe or in Scripts/
         string[] candidates =
         {
             Path.Combine(AppContext.BaseDirectory, "Scripts", "parse_luckygob.py"),
@@ -302,7 +347,7 @@ public class ManifestSourceFetcher
         string? script = candidates.FirstOrDefault(File.Exists);
         if (script == null)
         {
-            Logger.Debug("parse_luckygob.py not found in Scripts/ — falling back to VZ scanner");
+            Logger.Debug("parse_luckygob.py not found — falling back to VZ scanner");
             return null;
         }
 
@@ -330,21 +375,15 @@ public class ManifestSourceFetcher
                     if (proc.ExitCode == 0 && File.Exists(tmpOut))
                     {
                         string json = await File.ReadAllTextAsync(tmpOut);
-                        File.Delete(tmpIn);
-                        File.Delete(tmpOut);
+                        File.Delete(tmpIn); File.Delete(tmpOut);
                         return ParseGobJson(appId, json);
                     }
-                    else
-                    {
-                        string err = await proc.StandardError.ReadToEndAsync();
-                        Logger.Debug($"parse_luckygob.py [{pythonExe}] exit {proc.ExitCode}: {err.Trim()}");
-                    }
+                    string err = await proc.StandardError.ReadToEndAsync();
+                    Logger.Debug($"parse_luckygob.py [{pythonExe}] exit {proc.ExitCode}: {err.Trim()}");
                 }
-                catch { /* try next python exe name */ }
+                catch { }
             }
-
-            File.Delete(tmpIn);
-            File.Delete(tmpOut);
+            File.Delete(tmpIn); File.Delete(tmpOut);
         }
         catch (Exception ex) { Logger.Debug($"ParseGobViaPythonAsync: {ex.Message}"); }
         return null;
@@ -373,41 +412,26 @@ public class ManifestSourceFetcher
                 if (depot.TryGetProperty("manifestData", out var dataElem))
                 {
                     string b64 = dataElem.GetString() ?? "";
-                    if (!string.IsNullOrEmpty(b64))
-                        data = Convert.FromBase64String(b64);
+                    if (!string.IsNullOrEmpty(b64)) data = Convert.FromBase64String(b64);
                 }
 
                 result.Manifests[depotId] = new ManifestEntry
-                {
-                    DepotId    = depotId,
-                    ManifestId = manifestId,
-                    Data       = data
-                };
+                    { DepotId = depotId, ManifestId = manifestId, Data = data };
             }
             return result;
         }
         catch (Exception ex) { Logger.Debug($"ParseGobJson: {ex.Message}"); return null; }
     }
 
-    /// <summary>
-    /// Heuristic fallback: scan the decrypted blob for SteamKit2 VZ magic bytes
-    /// and try DepotManifest.Deserialize from each hit. Cannot recover depot IDs
-    /// or keys without full gob parsing, so it logs candidates for debugging.
-    /// Install Python + pygob for full luckygametools support.
-    /// </summary>
     private static ManifestResult? ParseGobViaVzScanner(uint appId, byte[] data)
     {
-        Logger.Debug($"[luckygametools] VZ scanner: scanning {data.Length} bytes for manifest magic...");
-        var result = new ManifestResult { AppId = appId };
+        Logger.Debug($"[luckygametools] VZ scanner: scanning {data.Length} bytes...");
         int found = 0;
 
         for (int i = 0; i < data.Length - 4; i++)
         {
-            // VZ magic = 0x56 0x5A
             if (data[i] != 0x56 || data[i + 1] != 0x5A) continue;
-
-            // Try multiple lengths to find where this manifest ends
-            int[] trySizes = { 2 * 1024 * 1024, 1024 * 1024, 512 * 1024, 256 * 1024, 128 * 1024 };
+            int[] trySizes = { 2 * 1024 * 1024, 1024 * 1024, 512 * 1024, 256 * 1024 };
             foreach (int sz in trySizes)
             {
                 int end = Math.Min(i + sz, data.Length);
@@ -416,22 +440,18 @@ public class ManifestSourceFetcher
                     var dm = SteamKit2.DepotManifest.Deserialize(data[i..end]);
                     if (dm?.Files == null || dm.Files.Count == 0) continue;
                     found++;
-                    Logger.Info($"[luckygametools] VZ hit @{i}: {dm.Files.Count} files " +
-                                $"(depot ID unknown — install Python+pygob for full support)");
+                    Logger.Debug($"[luckygametools] VZ hit @{i}: {dm.Files.Count} files");
                     break;
                 }
                 catch { }
             }
         }
 
-        if (found == 0)
-            Logger.Debug("[luckygametools] VZ scanner: no valid manifests found");
-
-        // Return null unless we have actual depot IDs — without them the data is unusable
-        return null;
+        if (found == 0) Logger.Debug("[luckygametools] VZ scanner: no valid manifests found");
+        return null; // depot IDs unavailable without full gob parsing
     }
 
-    // ─── printedwaste.com ────────────────────────────────────────────────────
+    // ─── printedwaste.com ────────────────────────────────────────────────
 
     private async Task<ManifestResult?> TryPrintedWasteAsync(uint appId)
     {
@@ -451,7 +471,7 @@ public class ManifestSourceFetcher
         catch (Exception ex) { Logger.Debug($"[{source}] {ex.Message}"); return null; }
     }
 
-    // ─── steambox.gdata.fun ───────────────────────────────────────────────────
+    // ─── steambox.gdata.fun ──────────────────────────────────────────────
 
     private async Task<ManifestResult?> TryGdataAsync(uint appId)
     {
@@ -468,7 +488,7 @@ public class ManifestSourceFetcher
         catch (Exception ex) { Logger.Debug($"[{source}] {ex.Message}"); return null; }
     }
 
-    // ─── cysaw.top ────────────────────────────────────────────────────────────
+    // ─── cysaw.top ───────────────────────────────────────────────────────
 
     private async Task<ManifestResult?> TryCysawAsync(uint appId)
     {
@@ -488,7 +508,7 @@ public class ManifestSourceFetcher
         catch (Exception ex) { Logger.Debug($"[{source}] {ex.Message}"); return null; }
     }
 
-    // ─── Zip (.st / .lua / .manifest) ────────────────────────────────────────
+    // ─── Zip / .st / .lua / Key.vdf parser ──────────────────────────────
 
     private async Task<ManifestResult?> ParseZipSourceAsync(
         uint appId, string source, byte[] zipBytes)
@@ -505,14 +525,14 @@ public class ManifestSourceFetcher
             {
                 var parts = Path.GetFileNameWithoutExtension(name).Split('_');
                 if (parts.Length >= 2 &&
-                    uint.TryParse(parts[0], out uint dId) &&
+                    uint.TryParse(parts[0],  out uint  dId) &&
                     ulong.TryParse(parts[1], out ulong mId))
                 {
                     using var s = entry.Open(); using var buf = new MemoryStream();
                     await s.CopyToAsync(buf);
                     result.Manifests[dId] = new ManifestEntry
                         { DepotId = dId, ManifestId = mId, Data = buf.ToArray() };
-                    Logger.Info($"[{source}] manifest {name} ✓");
+                    Logger.Debug($"[{source}] manifest {name} ✓");
                 }
             }
             else if (name.EndsWith(".st"))
@@ -527,7 +547,7 @@ public class ManifestSourceFetcher
                 using var sr = new StreamReader(s, Encoding.UTF8);
                 ParseLuaContent(appId, await sr.ReadToEndAsync(), result);
             }
-            else if (name.ToLowerInvariant() == "key.vdf")
+            else if (name.ToLowerInvariant() is "key.vdf" or "config.vdf")
             {
                 using var s = entry.Open(); using var buf = new MemoryStream();
                 await s.CopyToAsync(buf);
@@ -538,7 +558,7 @@ public class ManifestSourceFetcher
         return result.Manifests.Count > 0 || result.DepotKeys.Count > 0 ? result : null;
     }
 
-    // ─── .st parser ───────────────────────────────────────────────────────────
+    // ─── .st parser ──────────────────────────────────────────────────────
 
     private void ParseStFile(uint appId, byte[] data, ManifestResult result)
     {
@@ -558,7 +578,7 @@ public class ManifestSourceFetcher
         catch (Exception ex) { Logger.Debug($"ParseStFile: {ex.Message}"); }
     }
 
-    // ─── Lua / .st text parser ────────────────────────────────────────────────
+    // ─── Lua parser ──────────────────────────────────────────────────────
 
     private static readonly Regex AddAppIdRx = new(
         @"addappid\(\s*(\d+)\s*(?:,\s*\d+\s*,\s*""([0-9a-fA-F]+)""\s*)?\)",
@@ -590,14 +610,16 @@ public class ManifestSourceFetcher
         }
     }
 
-    // ─── Key.vdf parser ───────────────────────────────────────────────────────
+    // ─── Key.vdf / config.vdf parser ─────────────────────────────────────
 
     private static void ParseKeyVdf(byte[] data, ManifestResult result, byte[]? xorKey)
     {
         try
         {
-            string vdf     = Encoding.UTF8.GetString(data);
-            var    depotRx = new Regex(
+            string vdf = Encoding.UTF8.GetString(data);
+
+            // Standard Key.vdf format: "depotId" { "DecryptionKey" "hexkey" }
+            var depotRx = new Regex(
                 @"""(\d+)""\s*\{[^}]*""DecryptionKey""\s*""([0-9a-fA-F]+)""",
                 RegexOptions.Singleline);
             foreach (Match m in depotRx.Matches(vdf))
@@ -608,11 +630,14 @@ public class ManifestSourceFetcher
                 result.DepotKeys[depotId] = key;
                 Logger.Debug($"Key.vdf: depot {depotId}");
             }
+
+            // config.vdf format: "depots" { "depotId" { "DecryptionKey" "hexkey" } }
+            // (same regex matches — the outer nesting doesn't matter for regex)
         }
         catch (Exception ex) { Logger.Debug($"ParseKeyVdf: {ex.Message}"); }
     }
 
-    // ─── Crypto ───────────────────────────────────────────────────────────────
+    // ─── Crypto ──────────────────────────────────────────────────────────
 
     private static byte[]? SymmetricDecrypt(byte[] key, byte[] cipher)
     {
@@ -638,14 +663,14 @@ public class ManifestSourceFetcher
 
     private static byte[] Decompress(byte[] data)
     {
-        using var ms  = new MemoryStream(data);
-        using var gz  = new DeflateStream(ms, CompressionMode.Decompress);
+        using var ms   = new MemoryStream(data);
+        using var gz   = new DeflateStream(ms, CompressionMode.Decompress);
         using var out_ = new MemoryStream();
         gz.CopyTo(out_);
         return out_.ToArray();
     }
 
-    // ─── HTTP ─────────────────────────────────────────────────────────────────
+    // ─── HTTP ─────────────────────────────────────────────────────────────
 
     private Dictionary<string, string> BuildGitHubHeaders()
     {
@@ -664,14 +689,13 @@ public class ManifestSourceFetcher
             foreach (var (k, v) in headers) req.Headers.TryAddWithoutValidation(k, v);
             var resp = await _http.SendAsync(req);
 
-            // FIX: detect rate limit specifically so we warn the user properly
-            if ((int)resp.StatusCode == 403 || (int)resp.StatusCode == 429)
+            if ((int)resp.StatusCode is 403 or 429)
             {
                 if (url.Contains("api.github.com"))
                 {
-                    _githubRateLimited = true;
+                    Interlocked.Exchange(ref _githubRateLimited, 1);
                     Logger.Warn("GitHub API rate-limited. Use --api-key <github_pat> " +
-                                "to raise the cap from 60 to 5000 req/hr.");
+                                "to raise cap from 60 to 5000 req/hr.");
                 }
                 return null;
             }
@@ -691,7 +715,7 @@ public class ManifestSourceFetcher
             var resp = await _http.SendAsync(req);
             if ((int)resp.StatusCode is 403 or 429)
             {
-                if (url.Contains("api.github.com")) _githubRateLimited = true;
+                if (url.Contains("api.github.com")) Interlocked.Exchange(ref _githubRateLimited, 1);
                 return null;
             }
             if (!resp.IsSuccessStatusCode) return null;
@@ -702,7 +726,7 @@ public class ManifestSourceFetcher
 
     private async Task<byte[]?> FetchRawAsync(string sha, string path, string repo)
     {
-        // FIX: extra CDN mirror URLs for resilience and CN coverage
+        // Multiple CDN mirrors — tries each in order until one responds 200
         string[] urls =
         {
             $"https://raw.githubusercontent.com/{repo}/{sha}/{path}",
@@ -711,13 +735,14 @@ public class ManifestSourceFetcher
             $"https://raw.dgithub.xyz/{repo}/{sha}/{path}",
             $"https://gh.akass.cn/{repo}/{sha}/{path}",
             $"https://jsdelivr.pai233.top/gh/{repo}@{sha}/{path}",
+            $"https://github.moeyy.xyz/https://raw.githubusercontent.com/{repo}/{sha}/{path}",
         };
         foreach (var url in urls)
         {
             try
             {
                 using var cts  = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                var        resp = await _http.GetAsync(url, cts.Token);
+                var resp = await _http.GetAsync(url, cts.Token);
                 if (resp.IsSuccessStatusCode)
                     return await resp.Content.ReadAsByteArrayAsync();
             }

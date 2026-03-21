@@ -30,14 +30,22 @@ public class DownloadEngine : IDisposable
         _scheduler    = new ChunkScheduler();
         _checkpoint   = Checkpoint.Load(_session.CheckpointPath);
         _fileAssembler = new FileAssembler(session.OutputDir);
-        Logger.Info($"Download engine initialised for AppID {session.AppId}");
+        Logger.Debug($"Download engine initialised for AppID {session.AppId}");
     }
 
     public async Task RunAsync()
     {
         try
         {
-            Logger.Info($"Starting with {_session.MaxDownloads} workers");
+            Logger.Info($"Starting download with {_session.MaxDownloads} workers");
+
+            // ── KEY FIX: pre-warm CDN server cache before starting workers.
+            //    Without this, each worker independently fetches the server list
+            //    on startup. While they do that, the chunk scheduler fills the
+            //    5 000-chunk throttle window and then STALLS waiting for workers
+            //    that are still fetching CDN servers — causing the 2–7 min hang.
+            Logger.Debug("Pre-fetching CDN server list...");
+            await _steamSession.GetCdnServersAsync();
 
             for (int i = 0; i < _session.MaxDownloads; i++)
             {
@@ -50,30 +58,28 @@ public class DownloadEngine : IDisposable
 
             var workerTasks = _workers.Select(w => w.RunAsync()).ToList();
             await ScheduleChunksAsync();
-            Logger.Info("All chunks scheduled — waiting for workers...");
+            Logger.Debug("All chunks scheduled — waiting for workers...");
             await Task.WhenAll(workerTasks);
 
             if (_ct.IsCancellationRequested)
             {
-                Logger.Warn("Download paused by user — saving checkpoint...");
+                Logger.Info("Download paused — saving checkpoint...");
                 _checkpoint.Save();
-                Logger.Info("Checkpoint saved. Resume with --resume <checkpoint-file>");
+                _session.WasCancelled = true;
             }
             else
             {
-                Logger.Info("All chunks downloaded — finalizing files...");
+                Logger.Debug("All chunks downloaded — finalizing files...");
                 await FinalizeAllFilesAsync();
                 if (_session.ValidateChecksums) await VerifyFilesAsync();
-                Logger.Info("Download completed successfully!");
+                Logger.Success("Download completed successfully!");
             }
         }
         catch (OperationCanceledException)
         {
-            // User pressed Ctrl+C - save checkpoint and exit gracefully
             Logger.Info("Download paused — saving checkpoint...");
             _checkpoint.Save();
-            Logger.Info($"Checkpoint saved to: {_session.CheckpointPath}");
-            // Don't throw - let the caller handle graceful exit
+            _session.WasCancelled = true;
         }
         catch (Exception ex)
         {
@@ -101,7 +107,7 @@ public class DownloadEngine : IDisposable
     {
         foreach (var depot in _session.Depots)
         {
-            Logger.Info($"Scheduling chunks for depot {depot.DepotId}");
+            Logger.Debug($"Scheduling chunks for depot {depot.DepotId}");
             foreach (var file in depot.Files)
             {
                 if (_session.FileFilters.Count > 0)
@@ -114,8 +120,9 @@ public class DownloadEngine : IDisposable
                     if (_ct.IsCancellationRequested) return;
                     if (_checkpoint.IsChunkComplete(chunk.ChunkIdHex)) continue;
 
-                    while (_scheduler.PendingCount > 5000 && !_ct.IsCancellationRequested)
-                        await Task.Delay(100, _ct);
+                    // Back-pressure: don't queue more than 10k chunks ahead of workers
+                    while (_scheduler.PendingCount > 10_000 && !_ct.IsCancellationRequested)
+                        await Task.Delay(50, _ct);
 
                     _scheduler.Enqueue(new ChunkTask
                         { DepotId = depot.DepotId, Chunk = chunk, File = file,
@@ -157,7 +164,7 @@ public class DownloadEngine : IDisposable
                 }
                 else Logger.Warn($"Missing: {file.FileName}");
 
-                if (++done % 100 == 0) Logger.Info($"Verified {done}/{total}");
+                if (++done % 500 == 0) Logger.Info($"Verified {done}/{total}");
             }
         Logger.Info($"Verification complete: {done}/{total} files");
         await Task.CompletedTask;

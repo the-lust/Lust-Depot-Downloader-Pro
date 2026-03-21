@@ -8,6 +8,7 @@ if errorlevel 1 ( echo ERROR: .NET 8 SDK not found. & pause & exit /b 1 )
 dotnet restore
 dotnet publish -c Debug -r win-x86 --self-contained true ^
     /p:PublishSingleFile=true ^
+    /p:EnableCompressionInSingleFile=true ^
     /p:IncludeNativeLibrariesForSelfExtract=true ^
     -o publish\win-x86-debug
 if exist publish\win-x86-debug\LustsDepotDownloaderPro.exe (

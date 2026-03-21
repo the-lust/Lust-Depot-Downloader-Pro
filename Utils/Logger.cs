@@ -9,85 +9,102 @@ public static class Logger
     private static StreamWriter? _logWriter;
     private static readonly ConcurrentQueue<string> _logQueue = new();
 
+    /// <summary>
+    /// When true, Info() goes to file only — not console.
+    /// Set automatically when --debug is not passed. Warnings + errors always show.
+    /// </summary>
+    public static bool QuietMode { get; set; } = false;
+
+    /// <summary>
+    /// When true, Info() AND Warn() skip the console (during live TUI progress).
+    /// Errors still always print. File logging is unaffected.
+    /// </summary>
+    public static bool SilentMode { get; set; } = false;
+
     public static void Initialize(bool debug = false)
     {
         _debugEnabled = debug;
 
-        // Create log file
-        string logPath = Path.Combine(Environment.CurrentDirectory, "logs", $"download_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-        
-        _logWriter = new StreamWriter(logPath, append: true)
+        try
         {
-            AutoFlush = true
-        };
+            string logDir  = Path.Combine(Environment.CurrentDirectory, "logs");
+            Directory.CreateDirectory(logDir);
+            string logPath = Path.Combine(logDir, $"download_{DateTime.Now:yyyyMMdd_HHmmss}.log");
 
-        // Start background log writer
-        _ = Task.Run(async () =>
-        {
-            while (true)
+            _logWriter = new StreamWriter(logPath, append: true) { AutoFlush = true };
+
+            // Background file writer — disk I/O never blocks main thread
+            _ = Task.Run(async () =>
             {
-                if (_logQueue.TryDequeue(out var message))
+                while (true)
                 {
-                    await _logWriter.WriteLineAsync(message);
+                    if (_logQueue.TryDequeue(out var msg))
+                        await _logWriter.WriteLineAsync(msg);
+                    else
+                        await Task.Delay(50);
                 }
-                else
-                {
-                    await Task.Delay(100);
-                }
-            }
-        });
+            });
+        }
+        catch { /* non-fatal */ }
 
         Info("Logger initialized");
     }
 
+    // ─── Public API ───────────────────────────────────────────────────────
+
     public static void Info(string message)
     {
-        Log("INFO", message, ConsoleColor.White);
+        QueueForFile("INFO", message);
+        if (SilentMode || QuietMode) return;
+        WriteConsole("INFO", message, ConsoleColor.White);
     }
 
     public static void Warn(string message)
     {
-        Log("WARN", message, ConsoleColor.Yellow);
+        QueueForFile("WARN", message);
+        if (SilentMode) return;
+        WriteConsole("WARN", message, ConsoleColor.Yellow);
     }
 
     public static void Error(string message)
     {
-        Log("ERROR", message, ConsoleColor.Red);
+        QueueForFile("ERROR", message);
+        // Errors ALWAYS reach console regardless of mode
+        WriteConsole("ERROR", message, ConsoleColor.Red);
     }
 
     public static void Debug(string message)
     {
-        if (_debugEnabled)
-        {
-            Log("DEBUG", message, ConsoleColor.Gray);
-        }
+        if (!_debugEnabled) return;
+        QueueForFile("DEBUG", message);
+        WriteConsole("DEBUG", message, ConsoleColor.Gray);
     }
 
     public static void Success(string message)
     {
-        Log("SUCCESS", message, ConsoleColor.Green);
+        QueueForFile("SUCCESS", message);
+        if (SilentMode) return;
+        WriteConsole("SUCCESS", message, ConsoleColor.Green);
     }
 
-    private static void Log(string level, string message, ConsoleColor color)
+    // ─── Internals ────────────────────────────────────────────────────────
+
+    private static void QueueForFile(string level, string message)
     {
-        string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
-        string logMessage = $"[{timestamp}] [{level}] {message}";
+        string ts = DateTime.Now.ToString("HH:mm:ss.fff");
+        _logQueue.Enqueue($"[{ts}] [{level}] {message}");
+    }
 
-        // Queue for file writing
-        _logQueue.Enqueue(logMessage);
-
-        // Console output
+    private static void WriteConsole(string level, string message, ConsoleColor color)
+    {
+        string ts = DateTime.Now.ToString("HH:mm:ss.fff");
         lock (_lock)
         {
             Console.ForegroundColor = color;
-            Console.WriteLine(logMessage);
+            Console.WriteLine($"[{ts}] [{level}] {message}");
             Console.ResetColor();
         }
     }
 
-    public static void Dispose()
-    {
-        _logWriter?.Dispose();
-    }
+    public static void Dispose() => _logWriter?.Dispose();
 }

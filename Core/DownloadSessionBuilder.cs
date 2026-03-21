@@ -79,7 +79,7 @@ public class DownloadSessionBuilder
 
     public async Task<DownloadSession> BuildAsync(string outputPath)
     {
-        Logger.Info($"Building session for AppID {_options.AppId}");
+        Logger.Debug($"Building session for AppID {_options.AppId}");
 
         var session = new DownloadSession
         {
@@ -97,7 +97,7 @@ public class DownloadSessionBuilder
         var userDepotKeys = LoadDepotKeys(_options.DepotKeysFile);
 
         // Community sources first (may save a CDN round-trip)
-        Logger.Info("Checking community manifest sources...");
+        Logger.Debug("Checking community manifest sources...");
         var fetcher         = new ManifestSourceFetcher(_options.ApiKey);
         ManifestResult? communityResult = await fetcher.FetchAsync(_options.AppId);
 
@@ -115,14 +115,14 @@ public class DownloadSessionBuilder
             int added = 0;
             foreach (var id in communityResult.Manifests.Keys)
                 if (allDepotIds.Add(id)) added++;
-            if (added > 0) Logger.Info($"Added {added} community-only depot(s)");
+            if (added > 0) Logger.Debug($"Added {added} community-only depot(s)");
         }
 
         if (allDepotIds.Count == 0)
             throw new Exception(
                 "No depots found. Try --depot <id> --manifest <id> explicitly.");
 
-        Logger.Info($"Depots to process: {allDepotIds.Count}");
+        Logger.Debug($"Depots to process: {allDepotIds.Count}");
 
         // If manifest-only, just report and return empty session
         if (_options.ManifestOnly)
@@ -165,7 +165,7 @@ public class DownloadSessionBuilder
     {
         try
         {
-            Logger.Info($"Preparing depot {depotId}");
+            Logger.Debug($"Preparing depot {depotId}");
 
             // 1. Depot key
             byte[]? depotKey = null;
@@ -193,7 +193,7 @@ public class DownloadSessionBuilder
             // 2b. Community binary manifest
             if (communityResult?.Manifests.TryGetValue(depotId, out var cm) == true && cm.Data != null)
             {
-                Logger.Info($"Depot {depotId}: using community manifest binary ({cm.Data.Length:N0} bytes)");
+                Logger.Debug($"Depot {depotId}: using community manifest binary ({cm.Data.Length:N0} bytes)");
                 try
                 {
                     var dm = SteamKit2.DepotManifest.Deserialize(cm.Data);
@@ -221,7 +221,7 @@ public class DownloadSessionBuilder
             }
 
             // 2d. CDN manifest
-            Logger.Info($"Depot {depotId}: fetching manifest {manifestId} from CDN...");
+            Logger.Debug($"Depot {depotId}: fetching manifest {manifestId} from CDN...");
             var manifest = await _steam.DownloadManifestAsync(
                 appId, depotId, manifestId, depotKey,
                 _options.Branch ?? "public", _options.BranchPassword);
@@ -318,7 +318,7 @@ public class DownloadSessionBuilder
                 }
                 ids.Add(depotId);
             }
-            Logger.Info($"PICS: {ids.Count} depot(s) for app {appId}");
+            Logger.Debug($"PICS: {ids.Count} depot(s) for app {appId}");
         }
         catch (Exception ex) { Logger.Warn($"GetDepotIds: {ex.Message}"); }
         return ids;

@@ -108,7 +108,7 @@ public class SteamSession : IDisposable
         const int maxAttempts = 3;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            Logger.Info($"Connection attempt {attempt}/{maxAttempts}...");
+            Logger.Debug($"Connection attempt {attempt}/{maxAttempts}...");
             _isRunning = true;
             _ = Task.Run(RunCallbackPump);
 
@@ -231,7 +231,7 @@ public class SteamSession : IDisposable
         try
         {
             _cdnServers = await _steamContent.GetServersForSteamPipe();
-            Logger.Info($"CDN servers available: {_cdnServers.Count}");
+            Logger.Debug($"CDN servers available: {_cdnServers.Count}");
         }
         catch (Exception ex)
         {
@@ -260,7 +260,7 @@ public class SteamSession : IDisposable
                 var manifest = await CdnClient.DownloadManifestAsync(
                     depotId, manifestId, requestCode, server, depotKey,
                     proxyServer: null, cdnAuthToken: null);
-                Logger.Info($"Manifest downloaded ({manifest.Files?.Count ?? 0} files)");
+                Logger.Debug($"Manifest downloaded ({manifest.Files?.Count ?? 0} files)");
                 return manifest;
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
@@ -273,7 +273,7 @@ public class SteamSession : IDisposable
                     var manifest = await CdnClient.DownloadManifestAsync(
                         depotId, manifestId, requestCode, server, depotKey,
                         proxyServer: null, cdnAuthToken: token);
-                    Logger.Info($"Manifest downloaded with auth token ({manifest.Files?.Count ?? 0} files)");
+                    Logger.Debug($"Manifest downloaded with auth token ({manifest.Files?.Count ?? 0} files)");
                     return manifest;
                 }
                 catch (Exception ex2) { lastEx = ex2; Logger.Debug($"CDN retry {server.Host}: {ex2.Message}"); }

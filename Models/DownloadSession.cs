@@ -12,6 +12,7 @@ public class DownloadSession
     public List<DepotInfo> Depots { get; set; } = new();
     public HashSet<string> FileFilters { get; set; } = new();
     public bool ValidateChecksums { get; set; }
+    public bool WasCancelled { get; set; } = false;
     public DateTime StartTime { get; set; } = DateTime.UtcNow;
 
     public static DownloadSession LoadFromCheckpoint(string checkpointPath)
