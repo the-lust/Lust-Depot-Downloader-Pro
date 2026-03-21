@@ -10,7 +10,7 @@
 [![Version](https://img.shields.io/badge/Version-3.0-green.svg)]()
 [![SteamKit2](https://img.shields.io/badge/SteamKit2-3.2.0-1b2838.svg)]()
 
-*Download Steam depots fast, resumably, and without the headache.*
+*Download any Steam game — fast, resumable, no account needed for most titles.*
 
 </div>
 
@@ -18,317 +18,500 @@
 
 ## 📌 What Is This?
 
-**Lusts Depot Downloader Pro** is a command-line Steam depot downloader built on top of [SteamKit2](https://github.com/SteamRE/SteamKit). It grabs game depots directly from Steam's CDN — anonymously or with an account — with multi-threaded downloading, **pause/resume support**, CDN failover, and a clean terminal UI.
+**Lusts Depot Downloader Pro** is a command-line Steam depot downloader built on [SteamKit2](https://github.com/SteamRE/SteamKit). It downloads game files directly from Steam's CDN — **anonymously or with an account** — using community-sourced manifests and depot keys from 33+ sources so you can download almost any game without owning it.
 
-It's a supercharged depot downloader with **community manifest support**, **checkpoint resuming**, and quality-of-life features. Perfect for backing up games you own, downloading older game versions, or getting free-to-play content.
+**The primary goal is anonymous download.** Owning the game on Steam is a secondary fallback — the community manifest system handles everything else.
 
-> ⚠️ **For educational purposes and backup of owned content only. Always comply with Steam's Terms of Service.**
+> ⚠️ **For educational purposes and backup of owned content. Always comply with Steam's Terms of Service.**
 
 ---
 
-## ✨ Features
+## ✨ What's New in v3.0
 
-### Core Features ✅
+### 🆕 Dual-Engine Download System
+- **70% Primary workers** (SteamKit2 CDN — authenticated, LZMA-aware)
+- **30% Secondary workers** (direct HTTP fallback — `Bearer /depot/{id}/chunk/{hex}`)
+- Both pull from the **same queue simultaneously** — if primary fails a chunk, secondary picks it up automatically
+- No more stuck downloads when CDN is having issues
+
+### 🆕 33 Community Manifest Sources (All Parallel)
+All sources fire simultaneously and results are merged:
+- **13 GitHub ManifestAutoUpdate/ManifestHub repos** — ikun0014, Auiowu, tymolu233, SteamAutoCracks, sean-who, BlankTMing, wxy1343, pjy612, P-ToyStore, isKoi, yunxiao6, BlueAmulet, masqueraigne + more
+- **luckygametools/steam-cfg** — AES+XOR encrypted depot data
+- **printedwaste.com, steambox.gdata.fun, cysaw.top** — REST/ZIP sources
+- **29 total GitHub repos + 3 REST endpoints + luckygametools = 33+ sources**
+
+### 🆕 Dual GitHub Token Support (10,000 req/hr)
+- Add `GITHUB_API_KEY_PAT` + `GITHUB_API_KEY_CLASSIC` to `.env`
+- Each token has 5,000 req/hr — two tokens = **10,000 req/hr combined**
+- Smart per-token rate-limit tracking: if one token hits the limit, automatically switches to the other
+- Proper 403 vs rate-limit detection (checks `X-RateLimit-Remaining` header — no more false warnings)
+
+### 🆕 Auto-TOTP (No More 2FA Prompts)
+- Add your Steam Guard `shared_secret` to `.env`
+- 2FA codes generated automatically — **zero manual entry**
+- Includes Steam time server sync for clock skew correction
+
+### 🆕 DB-Backed Progress (No More Checkpoint Files)
+- All progress stored in `%APPDATA%\LustsDepotDownloader\localdb.json`
+- No scattered `checkpoint_*.json` files next to game folders
+- Resume with just `--app` and `--output` — no file path needed
+
+### 🆕 14-Day Depot Key Cache
+- Depot keys cached to disk after first fetch
+- Re-used for 14 days before re-requesting from Steam
+- Saves time and API calls on repeat downloads
+
+### 🆕 Silent Re-Login (Refresh Tokens)
+- After first login with `--remember-password`, the session token is saved
+- Future runs re-authenticate silently — no password prompt
+
+### 🆕 Update Checker
+- `--updates` checks if any downloaded game has newer manifest IDs available
+- Works per-game or across all recorded downloads at once
+
+### 🆕 Build-Time Config (`.env` System)
+- All API keys, tokens, and secrets baked into the binary at compile time
+- Users never need to pass `--api-key` manually
+- Values come from `.env` → compiled into `EmbeddedConfig.Generated.cs` → baked into exe
+- `.env` is gitignored — **never committed, never shipped**
+
+---
+
+## ✨ Full Feature List
+
+### Core ✅
 | Feature | Details |
 |---|---|
-| 🚀 **Multi-threaded** | 1–64 concurrent download workers |
-| ⏸️ **Pause & Resume** | **FULLY WORKING** — Checkpoint system, pick up exactly where you left off |
-| 🌐 **CDN Failover** | Automatic fallback across 20+ Steam CDN servers |
-| 📄 **Community Manifests** | Pulls from ManifestHub — download games without owning them |
-| 🔑 **Depot Keys** | Load keys from file for encrypted depots |
-| 🌿 **Branch Support** | Public, beta, or any custom branch |
-| 🔍 **File Filtering** | Wildcard and regex filters — download only what you need |
-| ✅ **Checksum Validation** | Verify file integrity after download |
-| 🎨 **Terminal UI** | Live progress bars, speed, ETA — powered by Spectre.Console |
-| 📦 **Single Executable** | Self-contained, no installs, no dependencies |
+| 🚀 **Multi-threaded** | 1–64 parallel workers |
+| ⏸️ **Pause & Resume** | DB-backed progress — just `--resume`, no file path needed |
+| 🌐 **CDN Failover** | 20+ Steam CDN servers, auto-switches on failure |
+| 📄 **33 Manifest Sources** | All fire in parallel and merge results |
+| 🔑 **Depot Keys** | From community sources, user file, or Steam API |
+| 🔄 **Dual Download Engine** | Primary + secondary workers cooperate on same queue |
+| ✅ **Checksum Validation** | `--validate` verifies integrity after download |
+| 🎨 **Clean Terminal UI** | Progress bar, filename, speed — nothing else |
+| 📦 **Single Executable** | Self-contained, zero dependencies |
 | 🖥️ **Cross-Platform** | Windows, Linux, macOS |
 
 ### Authentication ✅
 | Feature | Details |
 |---|---|
-| 🔓 **Anonymous Login** | Download free-to-play & public content without account |
-| 🔐 **Username/Password** | Standard Steam authentication |
-| 🛡️ **Steam Guard** | Email codes prompted automatically |
-| 📱 **2FA Support** | Mobile authenticator codes prompted when needed |
-| 💾 **Save Credentials** | `--remember-password` to avoid retyping |
+| 🔓 **Anonymous** | No account needed for most games via community sources |
+| 🔐 **Username/Password** | Full Steam account login |
+| 📱 **Auto-TOTP** | Set `STEAM_SHARED_SECRET` in `.env` → zero 2FA prompts |
+| 🛡️ **Steam Guard** | Email codes prompted interactively when needed |
+| 🔁 **Refresh Tokens** | Silent re-login after first `--remember-password` |
+| 💾 **Credential Manager** | Saved credentials reused automatically |
 
-### Advanced Features ✅
+### Advanced ✅
 | Feature | Details |
 |---|---|
 | 🎯 **Platform Filtering** | OS and architecture-specific depot selection |
-| 🌍 **Language Selection** | Download only your language's depot |
-| 📊 **Real-time Stats** | Live MB/s speed, percentage, and ETA |
+| 🌍 **Language Selection** | Download only your language's depots |
+| 📊 **Real-time Stats** | Live MB/s, %, ETA |
 | 🔄 **Auto Retry** | Exponential backoff on chunk failures |
 | 🐍 **Python Scripts** | Manifest and key generation from community sources |
+| 🗂️ **Local Database** | Game records, update tracking, download history |
+| 🔔 **Update Detection** | Check if downloaded games have newer versions |
 | 🔧 **GUI-Ready CLI** | Parse-friendly output for wrapping in GUI apps |
-| 🎛️ **All Platforms/Languages** | Download every platform/language with one flag |
-
-### ⚠️ Not Yet Implemented
-| Feature | Status |
-|---|---|
-| 🎯 **Workshop Downloads** | CLI options exist but not functional — needs Web API implementation |
-| 📱 **QR Code Auth** | Not available in SteamKit2 3.2.0 — use username/password instead |
 
 ---
 
-## 🛠️ Installation
+## 🛠️ Building from Source
 
-### Option 1 — Pre-built Executable *(Recommended)*
-1. Download the latest release
-2. Extract `LustsDepotDownloaderPro.exe` (Windows) or `LustsDepotDownloaderPro` (Linux/macOS)
-3. Run from your terminal
-
-### Option 2 — Build from Source
-
-**Prerequisites:**
+### Prerequisites
 - [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- Python 3.8+ *(optional, for manifest scripts)*
+- Python 3.8+ *(optional, for manifest scripts only)*
+
+### Setup (one time)
+
+```bash
+# 1. Copy the config template
+cp .env.template .env
+
+# 2. Fill in .env with your values (all optional — tool works without any)
+# See .env.template for full documentation of each field
+```
+
+### Build
 
 **Windows:**
 ```batch
-cd LustsDepotDownloaderPro
 build-win-x64-release.bat
-# Output: publish\win-x64\LustsDepotDownloaderPro.exe
-```
-
-**Build All Platforms:**
-```batch
-build.bat
-# Builds: win-x64, win-x86, linux-x64, osx-x64, osx-arm64
+# Output: publish\win-x64-release\LustsDepotDownloaderPro.exe
 ```
 
 **Linux / macOS:**
 ```bash
-cd LustsDepotDownloaderPro
-chmod +x build.sh
-./build.sh
-# Output: publish/linux-x64/LustsDepotDownloaderPro
+chmod +x build.sh && ./build.sh
+# Output: publish/linux-x64-release/LustsDepotDownloaderPro
 ```
+
+### How the .env Build System Works
+
+Values in `.env` are baked into the binary at compile time — no config files needed at runtime:
+
+```
+.env (your secrets)
+  │
+  └──> GenerateEmbeddedConfig.ps1  (runs before every build)
+         │
+         └──> EmbeddedConfig.Generated.cs  (C# constants, gitignored)
+                │
+                └──> baked into the exe
+```
+
+**Result:** ship one exe with your GitHub tokens, CDN settings, and TOTP secret already inside. Users who build from source add their own keys.
 
 ---
 
 ## 📖 Usage
 
-### The Basics
+### Download Any Game (Anonymous — No Account Needed)
 
 ```bash
-# Download a game anonymously (works for free-to-play & public depots)
-LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO"
+# Most games work without an account — community sources provide manifests + keys
+LustsDepotDownloaderPro --app 2358720 --output "D:\Games"
 
-# Download with your Steam account (required for paid games you own)
-LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "C:\Games\CSGO"
-
-# Download a specific depot + manifest
-LustsDepotDownloaderPro --app 730 --depot 731 --manifest 7617088375292372759 \
-  --depot-keys depot_keys.txt --output "C:\Games\CSGO"
+# More workers = faster download
+LustsDepotDownloaderPro --app 2358720 --output "D:\Games" --max-downloads 32
 ```
 
-### ⏸️ Pause & Resume (FULLY WORKING!)
-
-Press **Ctrl+C once** to pause gracefully. The download stops cleanly and saves a checkpoint automatically.
-
-**What you'll see:**
-```
-⏸  Pausing download...
-Checkpoint will be saved. Press Ctrl+C again to force quit.
-
-[Download stops]
-
-⏸  Download paused successfully!
-Checkpoint: D:\Games\CSGO\730_Counter-Strike Global Offensive\checkpoint_730.json
-
-To resume, run:
-  --app 730 --output "D:\Games\CSGO" --resume "D:\Games\CSGO\730_Counter-Strike Global Offensive\checkpoint_730.json"
-```
-
-**Resume exactly where you left off:**
-```bash
-# Copy and paste the command shown above, or manually specify:
-LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" \
-  --resume "C:\Games\CSGO\730_Counter-Strike Global Offensive\checkpoint_730.json"
-```
-
-> 💡 **Checkpoint location:** `<output>/<appid>_<AppName>/checkpoint_<appid>.json`  
-> 💡 **Press Ctrl+C twice** to force quit immediately (checkpoint may not save)
-
-**How it works:**
-- ✅ Checkpoint saves every 100 chunks during download
-- ✅ Checkpoint saves when you press Ctrl+C once
-- ✅ Resume skips already-downloaded chunks
-- ✅ No re-downloading — picks up exactly where it stopped
-- ✅ Works across restarts, network issues, or user pauses
-
-### 🚀 High-Speed Downloading
-
-Workers are parallel download threads. More workers = faster downloads (up to your connection's limit).
+### Download a Game You Own
 
 ```bash
-# Sweet spot for most connections (recommended)
-LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --max-downloads 32
-
-# Maximum speed (fast connections only — may trigger CDN rate limits)
-LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --max-downloads 64
+# With Steam account (required for some paid games not in community sources)
+LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "D:\Games"
 ```
+
+### Resume a Download
+
+```bash
+# Just pass --resume — no checkpoint file path needed
+LustsDepotDownloaderPro --app 2358720 --output "D:\Games" --resume
+
+# Or with more workers
+LustsDepotDownloaderPro --app 2358720 --output "D:\Games" --resume --max-downloads 32
+```
+
+### Check for Game Updates
+
+```bash
+# Check one game
+LustsDepotDownloaderPro --updates --app 2358720
+
+# Check all downloaded games
+LustsDepotDownloaderPro --updates
+```
+
+### View Downloaded Games
+
+```bash
+# Show everything in your local database
+LustsDepotDownloaderPro --games
+```
+
+### Set Preferred CDN Region (persists)
+
+```bash
+# Saved — all future downloads use this region automatically
+LustsDepotDownloaderPro --cdn-region 4
+```
+
+---
+
+## ⚡ Speed Guide
 
 | Workers | Best For | Expected Speed |
 |---------|----------|----------------|
-| `1-4` | Slow/metered connections | ~1–2 MB/s |
 | `8` *(default)* | Safe baseline | ~3–5 MB/s |
-| `16` | Good home broadband | ~5–10 MB/s |
-| `32` ✅ | **Sweet spot — recommended** | ~8–20 MB/s |
-| `64` | Very fast fiber (may hit CDN limits) | ~15–30+ MB/s |
+| `16` | Good broadband | ~5–10 MB/s |
+| `32` ✅ | **Recommended sweet spot** | ~8–20 MB/s |
+| `64` | Fast fibre (may hit CDN rate limit) | ~15–30+ MB/s |
 
-> 💡 **Above 32 workers**, Steam's CDN may rate-limit you. You'll see "operation was canceled" warnings. Drop to `--max-downloads 32` for better results.
+With v3.0's dual-engine system, the 30% secondary workers keep downloading even when CDN servers are being flaky, so real-world throughput is more consistent than before.
 
-### 🔍 File Filtering
+---
 
-Create a `filelist.txt`:
+## ⏸️ Pause & Resume
+
+Press **Ctrl+C once** to pause cleanly. Progress is saved to the local DB automatically.
+
 ```
-# Wildcards
-*.dll
-*.exe
-maps/*.bsp
-
-# Regex (prefix with regex:)
-regex:^models/.*\.(mdl|vtx|vvd)$
-
-# Exact paths
-game/csgo.exe
-game/engine.dll
+⏸ Pausing — saving progress...
+Resume with:
+  --app 2358720 --output "D:\Games" --resume
 ```
+
+Press **Ctrl+C twice** to force quit immediately.
+
+> Unlike v1.x, there are no checkpoint JSON files. Progress is stored in `%APPDATA%\LustsDepotDownloader\localdb.json` and looked up automatically from your `--app` + `--output` combination.
+
+---
+
+## 🔐 Authentication
+
+### Auto-TOTP (Recommended)
+
+Add to `.env` before building:
+```env
+STEAM_SHARED_SECRET=your_shared_secret_base64_here
+```
+
+2FA codes are generated automatically — no manual entry ever.
+
+**How to get `shared_secret`:**
+1. Export your authenticator from [Steam Desktop Authenticator](https://github.com/Jessecar96/SteamDesktopAuthenticator) or WinAuth
+2. Open the `.maFile` in a text editor
+3. Copy the `"shared_secret"` value
+
+### Manual 2FA (without .env)
 
 ```bash
-LustsDepotDownloaderPro --app 730 --filelist filelist.txt --output "C:\Games\CSGO"
+LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "D:\Games"
+# Prompted automatically:
+# Steam Mobile Authenticator code: ______
 ```
 
-### 🔐 Authentication Examples
+### Silent Re-Login
 
 ```bash
-# Save credentials (encrypted locally)
+# First time — saves a refresh token to the DB
 LustsDepotDownloaderPro --app 730 --username myuser --password mypass \
-  --remember-password --output "C:\Games"
+  --remember-password --output "D:\Games"
 
-# Steam Guard code will be prompted automatically
-LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "C:\Games"
-# Enter Steam Guard code: ______
-
-# 2FA mobile authenticator code will be prompted
-LustsDepotDownloaderPro --app 730 --username myuser --password mypass --output "C:\Games"
-# Enter 2FA code: ______
+# Every time after — no password prompt
+LustsDepotDownloaderPro --app 730 --username myuser --output "D:\Games"
 ```
 
-> ⚠️ **QR Code authentication (`--qr`) is NOT available** in this version (SteamKit2 3.2.0 limitation). Use standard username/password authentication instead.
+---
 
-### 🌿 Branch Support
+## 🌐 GitHub API Tokens (Optional but Recommended)
 
-```bash
-# Download from beta branch
-LustsDepotDownloaderPro --app 730 --branch beta --output "C:\Games\CSGO-Beta"
+Without tokens: **60 req/hr** (anonymous GitHub limit).  
+With tokens: **up to 10,000 req/hr**.
 
-# Password-protected branch
-LustsDepotDownloaderPro --app 730 --branch staging --branch-password secretword --output "C:\Games"
+Add to `.env` before building:
+```env
+GITHUB_API_KEY_PAT=ghp_your_fine_grained_token_here
+GITHUB_API_KEY_CLASSIC=ghp_your_classic_token_here
 ```
 
-### 🌍 Platform & Language Filtering
+Get tokens at [github.com/settings/tokens](https://github.com/settings/tokens) — **no scopes or permissions needed**, just generate and copy.
 
+The tool uses both tokens simultaneously in round-robin. If one hits its limit, it automatically switches to the other with no interruption to the download.
+
+Alternatively, pass at runtime (not baked in):
 ```bash
-# Windows 64-bit, English only
-LustsDepotDownloaderPro --app 730 --os windows --os-arch 64 --language english --output "C:\Games"
-
-# Download all platforms and all languages
-LustsDepotDownloaderPro --app 730 --all-platforms --all-languages --output "C:\Games"
-```
-
-### ✅ Other Useful Options
-
-```bash
-# Validate checksums after download
-LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --validate
-
-# Enable debug logging
-LustsDepotDownloaderPro --app 730 --output "C:\Games\CSGO" --debug
-
-# Override CDN cell (if having connection issues)
-LustsDepotDownloaderPro --app 730 --cellid 0 --output "C:\Games"
+LustsDepotDownloaderPro --app 730 --api-key ghp_xxx --output "D:\Games"
 ```
 
 ---
 
 ## 🎛️ All Command Line Options
 
-### Essential
-
-| Option | Short | Description | Example |
-|--------|-------|-------------|---------|
-| `--app` | `-a` | AppID to download | `--app 730` |
-| `--depot` | `-d` | Specific DepotID (downloads all if omitted) | `--depot 731` |
-| `--manifest` | `-m` | Specific Manifest ID | `--manifest 7617088375292372759` |
-| `--output` | `-o` | Output directory | `--output "C:\Games"` |
-
-### Authentication
-
-| Option | Short | Description | Example |
-|--------|-------|-------------|---------|
-| `--username` | `-u` | Steam username | `--username myuser` |
-| `--password` | `-p` | Steam password | `--password mypass` |
-| `--remember-password` | `-rp` | Save credentials for next time | `--remember-password` |
-| ~~`--qr`~~ | | ⚠️ **Not available** (SteamKit2 3.2.0 limitation) | — |
-
-### Depot & Manifest
-
-| Option | Short | Description | Example |
-|--------|-------|-------------|---------|
-| `--depot-keys` | `-dk` | Depot keys file | `--depot-keys keys.txt` |
-| `--manifest-file` | `-mf` | Local manifest file | `--manifest-file game.manifest` |
-| `--app-token` | `-at` | App access token | `--app-token 1234567890` |
-| `--branch` | `-b` | Branch name (default: public) | `--branch beta` |
-| `--branch-password` | `-bp` | Branch password | `--branch-password secret` |
-
-### Download Control
+### Download
 
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--max-downloads` | `-md` | Concurrent workers (1–64) | `8` |
-| `--resume` | `-r` | Resume from checkpoint file | — |
+| `--app` | `-a` | AppID to download | required |
+| `--depot` | `-d` | Specific DepotID (all if omitted) | — |
+| `--manifest` | `-m` | Specific Manifest ID | — |
+| `--output` | `-o` | Output directory | current dir |
+| `--max-downloads` | `-md` | Parallel workers (1–64) | `32` |
+| `--resume` | `-r` | Resume saved progress | `false` |
 | `--validate` | `-v` | Verify checksums after download | `false` |
-| `--pause` | | Pause active download (N/A in current design) | — |
-| `--status` | `-s` | Show current download status | — |
+| `--branch` | `-b` | Branch name | `public` |
+| `--branch-password` | `-bp` | Branch password | — |
 
-### Filtering
-
-| Option | Short | Description | Example |
-|--------|-------|-------------|---------|
-| `--filelist` | `-fl` | File filter list | `--filelist filters.txt` |
-| `--os` | | Target OS (`windows`/`macos`/`linux`) | `--os windows` |
-| `--os-arch` | `-arch` | Architecture (`32`/`64`) | `--os-arch 64` |
-| `--language` | `-lang` | Language | `--language english` |
-| `--all-platforms` | `-ap` | Download all platform depots | `--all-platforms` |
-| `--all-languages` | `-al` | Download all language depots | `--all-languages` |
-
-### Workshop ⚠️
-
-| Option | Short | Description | Status |
-|--------|-------|-------------|--------|
-| `--pubfile` | `-pf` | PublishedFileId | ⚠️ Not implemented |
-| `--ugc` | | UGC ID | ⚠️ Not implemented |
-
-> Workshop downloads show a warning message and fall back to standard app download. Full implementation requires Web API integration (planned for future release).
-
-### Misc
+### Authentication
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--debug` | | Verbose debug logging |
-| `--terminal-ui` | `-tui` | Enable live terminal UI (default: on) |
-| `--cellid` | `-c` | Override CDN cell ID |
-| `--loginid` | `-lid` | Steam Login ID (for running multiple instances) |
-| `--api-key` | `-key` | GitHub API key for community manifest sources |
+| `--username` | `-u` | Steam username |
+| `--password` | `-p` | Steam password |
+| `--remember-password` | `-rp` | Save refresh token for silent re-login |
+| `--api-key` | `-key` | GitHub API token (overrides baked-in .env value) |
+
+### Depot & Keys
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--depot-keys` | `-dk` | Depot keys file (`depotID;hexKey` format) |
+| `--manifest-file` | `-mf` | Local manifest file override |
+| `--app-token` | `-at` | App access token |
+
+### Filtering
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--filelist` | `-fl` | File filter list (wildcards + regex) |
+| `--os` | | Target OS (`windows`/`macos`/`linux`) |
+| `--os-arch` | `-arch` | Architecture (`32`/`64`) |
+| `--language` | `-lang` | Language depot filter |
+| `--all-platforms` | `-ap` | Include all platform depots |
+| `--all-languages` | `-al` | Include all language depots |
+
+### Info & Management
+
+| Option | Description |
+|--------|-------------|
+| `--games` / `--db` | List all recorded games in the local database |
+| `--updates` | Check for updates (use with `--app` for one game, alone for all) |
+| `--cdn-region <id>` | Set preferred CDN region ID (saved permanently) |
+| `--status` / `-s` | Show current download status |
+| `--manifest-only` | Print manifest IDs without downloading |
+| `--debug` | Verbose debug logging |
+
+### Misc
+
+| Option | Description |
+|--------|-------------|
+| `--cellid` / `-c` | Override CDN cell ID |
+| `--loginid` / `-lid` | Steam Login ID (for running multiple instances) |
+| `--all-archs` / `-aa` | Include all architecture depots |
+| `--low-violence` / `-lv` | Low-violence depots only |
+
+---
+
+## 📁 Project Structure
+
+```
+LustsDepotDownloaderPro/
+├── Core/
+│   ├── DownloadEngine.cs          # Worker orchestration (70% primary / 30% secondary split)
+│   ├── DownloadWorker.cs          # Per-worker dual-engine chunk download
+│   ├── FallbackDownloader.cs      # Direct HTTP fallback engine (AES+VZip pipeline)
+│   ├── ChunkScheduler.cs          # Thread-safe chunk queue (shared by both engines)
+│   ├── GlobalProgress.cs          # Rolling-window speed + ETA tracking
+│   ├── Checkpoint.cs              # DB-backed progress (no more .json files)
+│   ├── LocalDatabase.cs           # Persistent DB — progress, records, settings
+│   ├── UpdateChecker.cs           # Manifest ID comparison for update detection
+│   ├── FileAssembler.cs           # High-performance cached file writing
+│   └── DownloadSessionBuilder.cs  # Session prep & manifest loading
+├── Steam/
+│   ├── SteamSession.cs            # Auth (anon/password/TOTP/refresh token)
+│   ├── CdnManager.cs              # CDN tokens, 14-day key cache, server selection
+│   ├── SteamTotp.cs               # TOTP auth code generator (port of node-steam-totp)
+│   ├── ManifestSourceFetcher.cs   # 33 community sources, dual-token, parallel fetch
+│   ├── ManifestParser.cs          # Binary manifest decoding
+│   └── SteamLibraryScanner.cs     # Local Steam ACF scanner
+├── Models/
+│   ├── DownloadOptions.cs         # CLI option model
+│   ├── DownloadSession.cs         # Session state model
+│   └── GameEntry.cs               # DB record models (LocalGameRecord, DownloadRecord)
+├── Utils/
+│   ├── Logger.cs                  # Structured logging (QuietMode + SilentMode)
+│   ├── EmbeddedConfig.cs          # Compile-time config (from .env)
+│   ├── EmbeddedConfig.Generated.cs # Auto-generated from .env — gitignored
+│   ├── FileUtils.cs               # File helpers, CredentialManager
+│   └── VZipDecompressor.cs        # Steam VZip/zlib decompression
+├── UI/
+│   └── TerminalUI.cs              # Spectre.Console progress bar
+├── Scripts/
+│   └── generate_manifests.py      # Python manifest/key generator
+├── .env.template                  # Config template — copy to .env and fill in
+├── GenerateEmbeddedConfig.ps1     # Windows: reads .env, writes Generated.cs
+├── GenerateEmbeddedConfig.sh      # Linux/macOS equivalent
+├── Program.cs
+├── LustsDepotDownloaderPro.csproj
+└── build-win-x64-release.bat      # (and other platform build scripts)
+```
+
+---
+
+## 🔧 GUI Integration
+
+```csharp
+var process = new Process
+{
+    StartInfo = new ProcessStartInfo
+    {
+        FileName = "LustsDepotDownloaderPro.exe",
+        Arguments = $"--app {appId} --output \"{outputDir}\" --max-downloads 32",
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    }
+};
+
+// Log format (debug mode): [HH:mm:ss.fff] [LEVEL] Message
+// Normal mode: only progress bar output + completion message
+process.OutputDataReceived += (s, e) => ParseProgress(e.Data);
+process.Start();
+process.BeginOutputReadLine();
+await process.WaitForExitAsync();
+```
+
+**Exit codes:**
+| Code | Meaning |
+|------|---------|
+| `0` | ✅ Download complete |
+| `1` | ❌ Error |
+| `2` | ⏸️ Paused — progress saved to DB |
+
+---
+
+## 🚨 Troubleshooting
+
+### ❌ Game not downloading / no depots found
+- The game may not be in any community repo yet — check [SteamDB](https://www.steamdb.info) for the AppID
+- Try with a GitHub token: `--api-key ghp_xxx` (or add to `.env`)
+- For paid games not in community sources: `--username myuser --password mypass`
+
+### ❌ "AccessDenied" on depot key
+- This depot requires account ownership
+- The main game depot probably downloaded fine — these are usually language/variant depots
+- Login with `--username`/`--password` if you own the game
+
+### ❌ GitHub rate limit warning even with tokens
+- Make sure `GITHUB_API_KEY_PAT` and `GITHUB_API_KEY_CLASSIC` in `.env` are non-empty before building
+- Rebuild after updating `.env` — values are baked in at compile time
+- Pass `--api-key` at runtime to override: `--api-key ghp_xxx`
+
+### ❌ Slow startup (>10 seconds before download begins)
+- This is normal for large games — the app is fetching manifests from 33 sources in parallel
+- Should take under 5 seconds with tokens, up to 15 seconds without
+
+### ❌ "Failed to connect to Steam"
+- Check internet / firewall
+- Try `--cellid 0` to let Steam pick the best server
+- Steam servers may be temporarily down
+
+### 🐢 Download is slow
+- Default workers is `32` — if you set it lower, increase it
+- Try `--max-downloads 32` or `--max-downloads 64`
+- The secondary workers (fallback engine) may be slower on some connections
+
+---
+
+## 📝 Known Limitations
+
+| Feature | Status | Workaround |
+|---------|--------|------------|
+| QR Code Auth | ❌ SteamKit2 3.2.0 limitation | Use `--username`/`--password` |
+| Workshop Downloads | ❌ Not implemented | Needs Web API integration |
+| LZMA chunks via fallback engine | ⚠️ Routes to primary | Primary engine handles LZMA via SteamKit2 |
+| Bandwidth limiting | ❌ Not implemented | Use OS-level tools |
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Workshop downloads (Web API integration)
+- [ ] SteamKit2 3.4+ (QR code auth)
+- [ ] Bandwidth / speed limiting
+- [ ] Delta patching for incremental updates
+- [ ] Docker container
+- [ ] Download scheduling & queuing
 
 ---
 
 ## 🐍 Python Scripts
 
-Generate depot keys and manifests from community sources before downloading.
+Generate depot keys and manifests from community sources manually:
 
 ```bash
 cd Scripts
@@ -340,20 +523,9 @@ python generate_manifests.py 730
 # Keys only
 python generate_manifests.py 730 --keys-only
 
-# Generate a ready-to-run batch file
-python generate_manifests.py 730 --batch
-
 # List available manifests
 python generate_manifests.py 730 --list-manifests
-
-# Custom output folder
-python generate_manifests.py 730 --output my_manifests
 ```
-
-**Output files:**
-- `depot_keys_<appid>.txt` — depot keys in `depotID;hexKey` format
-- `manifests_<appid>.json` — available manifest IDs
-- `download_<appid>.bat` — ready-to-run download batch file
 
 ---
 
@@ -362,11 +534,8 @@ python generate_manifests.py 730 --output my_manifests
 ### Depot Keys (`depot_keys.txt`)
 ```
 # Format: depotID;hexKey
-# Lines starting with # are ignored
-
 731;E5A1D6C2F8B3A4E9D7C1F2A8B4C6E3D9
 732;A4B9E3F7C2D8A1E6B3F9C4D7E2A8B1C6
-733;C6E2A9D3F8B1C4E7A2D9F3B8C1E6A4D7
 ```
 
 ### File Filter List (`filelist.txt`)
@@ -375,173 +544,13 @@ python generate_manifests.py 730 --output my_manifests
 *.dll
 *.exe
 maps/*.bsp
-bin/*
 
 # Regex (prefix with regex:)
 regex:^models/.*\.(mdl|vtx|vvd)$
 
-# Exact file paths
+# Exact paths
 game/csgo.exe
-game/engine.dll
 ```
-
-### Checkpoint File *(auto-generated, don't edit)*
-```json
-{
-  "CompletedChunks": ["abc123...", "def456..."],
-  "LastSaved": "2026-03-19T18:51:49Z"
-}
-```
-
----
-
-## 📁 Project Structure
-
-```
-LustsDepotDownloaderPro/
-├── Core/
-│   ├── DownloadEngine.cs          # Main orchestration & worker management
-│   ├── DownloadWorker.cs          # Per-worker chunk download logic
-│   ├── ChunkScheduler.cs          # Thread-safe chunk queue
-│   ├── GlobalProgress.cs          # Shared progress tracking
-│   ├── Checkpoint.cs              # Pause/resume state persistence
-│   ├── FileAssembler.cs           # High-performance cached file writing
-│   └── DownloadSessionBuilder.cs  # Session prep & manifest loading
-├── Steam/
-│   ├── SteamSession.cs            # Auth, CDN tokens, connection
-│   ├── ManifestParser.cs          # Binary manifest decoding
-│   └── ManifestSourceFetcher.cs   # Community manifest sources
-├── Models/
-│   ├── DownloadOptions.cs         # CLI option model
-│   └── DownloadSession.cs         # Session state & checkpoint model
-├── Utils/
-│   ├── Logger.cs                  # Structured logging
-│   ├── FileUtils.cs               # File path helpers & credentials
-│   ├── CdnClient.cs               # CDN client wrapper
-│   └── VZipDecompressor.cs        # Steam VZip decompression
-├── UI/
-│   └── TerminalUI.cs              # Spectre.Console live UI
-├── Scripts/
-│   └── generate_manifests.py      # Python manifest/key generator
-├── Program.cs                     # Entry point & CLI parsing
-├── LustsDepotDownloaderPro.csproj
-├── build.bat / build.sh
-└── README.md
-```
-
----
-
-## 🔧 GUI Integration
-
-The tool is designed to be wrapped by GUI apps. Parse its stdout for progress updates.
-
-```csharp
-var process = new Process
-{
-    StartInfo = new ProcessStartInfo
-    {
-        FileName = "LustsDepotDownloaderPro.exe",
-        Arguments = $"--app {appId} --output \"{outputDir}\" --max-downloads 16",
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true
-    }
-};
-
-process.OutputDataReceived += (s, e) =>
-{
-    // Log format: [HH:mm:ss.fff] [LEVEL] Message
-    UpdateProgressBar(e.Data);
-};
-
-process.Start();
-process.BeginOutputReadLine();
-await process.WaitForExitAsync();
-```
-
-**Exit codes:**
-| Code | Meaning |
-|------|---------|
-| `0` | ✅ Success — download completed |
-| `1` | ❌ Error — check logs |
-| `2` | ⏸️ Paused — checkpoint saved |
-
----
-
-## 🚨 Troubleshooting
-
-### ❌ "Failed to connect to Steam"
-- Check your internet connection
-- Try a different CDN cell: `--cellid 0`
-- Check if firewall/antivirus is blocking outbound connections
-- Try again later (Steam servers may be down)
-
-### ❌ "Failed to get depot key" / "AccessDenied"
-- Use `--depot-keys` with a keys file
-- Some depots require account ownership — login with `--username` and `--password`
-- Generate keys using Python script: `python generate_manifests.py <appid> --keys-only`
-
-### ❌ "Manifest not found"
-- Double-check your AppID and DepotID
-- Try `--branch beta` or another branch
-- Community sources may not have this depot yet
-- Use: `python generate_manifests.py <appid> --list-manifests`
-
-### ❌ "All CDN servers failed" / 401 Unauthorized
-- Reduce workers: `--max-downloads 16`
-- **For paid games:** Login with `--username` and `--password`
-- Check if the game is region-locked
-- Your ISP may be throttling Steam traffic
-
-### ⚠️ Many "operation was canceled" warnings
-- **Too many workers overwhelming CDN**
-- Drop to `--max-downloads 32` (you'll often get same or better speed)
-- Above 32 workers triggers CDN rate limiting
-
-### 🐢 Download is slow
-- **Default is only 8 workers** — increase to `--max-downloads 32`
-- Check your internet speed (the bottleneck may be your connection)
-- Try different CDN cell: `--cellid 0`
-
-### ⚠️ "file is being used by another process" warnings
-- **This is harmless** — multiple workers briefly contend on the same large file
-- Worker retries automatically and file ends up correct
-- Download continues normally
-
-### ⏸️ Pause/Resume not working
-- **Always include `--app` and `--output` when resuming**
-- Example: `--app 730 --output "C:\Games" --resume "checkpoint_730.json"`
-- Checkpoint only stores chunk progress, not the original command
-
-### ⚠️ "QR code authentication not supported"
-- **QR auth is not available in this version** (SteamKit2 3.2.0 limitation)
-- **Workaround:** Use standard `--username` and `--password`
-- Steam Guard/2FA codes will be prompted when needed
-
----
-
-## 📝 Known Limitations
-
-| Feature | Status | Workaround |
-|---------|--------|------------|
-| QR Code Auth | ❌ Not available (SteamKit2 3.2.0) | Use `--username` & `--password` |
-| Workshop Downloads | ❌ Not implemented | Needs Web API integration |
-| Bandwidth Limiting | ❌ Not implemented | Use OS-level tools |
-| Download Scheduling | ❌ Not implemented | Use task scheduler |
-
----
-
-## 🗺️ Roadmap
-
-- [ ] Implement Workshop downloads (Web API integration)
-- [ ] Upgrade to SteamKit2 3.4+ (QR code support)
-- [ ] Bandwidth / speed limiting
-- [ ] Delta patching for incremental updates
-- [ ] Web UI
-- [ ] Docker container
-- [ ] Auto-update mechanism
-- [ ] Download scheduling & queuing
 
 ---
 
@@ -549,11 +558,13 @@ await process.WaitForExitAsync();
 
 <div align="center">
 
-*Made with ❤️ by The Lust — Version 3.0 — March 2026*
+*Made with ❤️ by The Lust — v3.0 — March 2026*
 
 *Built on [SteamKit2](https://github.com/SteamRE/SteamKit)*
 
-*Big thanks to [oureveryday](https://github.com/oureveryday) for the foundational depot downloader work*
+*Thanks to [oureveryday](https://github.com/oureveryday) for the foundational work*
+
+*Community manifest sources: ikun0014, BlankTMing, pjy612, SteamAutoCracks, sean-who, Auiowu, tymolu233, wxy1343, and many more*
 
 </div>
 
@@ -563,11 +574,6 @@ await process.WaitForExitAsync();
 
 **For educational purposes and backup of content you own only.**
 
-This tool downloads content directly from Steam's CDN. Always comply with:
-- Steam Subscriber Agreement
-- Steam Terms of Service  
-- Local laws regarding software licensing
+Always comply with Steam's Subscriber Agreement and Terms of Service.
 
-**I am not responsible for misuse of this software.**
-
-*Do note that abuse of this software, or owning it without my proper permission, is not allowed, nor selling or any kind of profit made related the use of it, can result in serious consequences!*
+*I am not responsible for misuse. Selling, distributing commercially, or using without permission is not allowed.*
