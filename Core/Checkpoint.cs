@@ -1,105 +1,76 @@
 using System.Collections.Concurrent;
-using Newtonsoft.Json;
 
 namespace LustsDepotDownloaderPro.Core;
 
+/// <summary>
+/// Progress tracker backed by LocalDatabase instead of a separate JSON file.
+/// All chunk progress is stored in the single localdb.json — no checkpoint files
+/// scattered next to game folders.
+///
+/// Each download session gets a key derived from (appId, outputDir) so the same
+/// game downloaded to two different folders has independent progress.
+/// </summary>
 public class Checkpoint
 {
-    private readonly string _checkpointPath;
-    private readonly ConcurrentHashSet<string> _completedChunks = new();
+    private readonly string _sessionKey;
+    private readonly LocalDatabase _db;
 
-    // Time-based throttle: save at most once every 30 seconds
-    private DateTime _lastSaveTime = DateTime.MinValue;
-    private readonly TimeSpan _saveInterval = TimeSpan.FromSeconds(30);
-    private readonly object _saveLock = new();
+    // Mirror of the DB set in memory for fast O(1) lookups during download
+    private readonly ConcurrentHashSet<string> _completed = new();
 
-    public HashSet<string> CompletedChunks => _completedChunks.ToHashSet();
-    public string FilePath => _checkpointPath;
+    public string SessionKey => _sessionKey;
+    public int    Count      => _completed.Count;
 
-    private Checkpoint(string checkpointPath) => _checkpointPath = checkpointPath;
-
-    public static Checkpoint Load(string checkpointPath)
+    private Checkpoint(string sessionKey, LocalDatabase db)
     {
-        var cp = new Checkpoint(checkpointPath);
-        if (!File.Exists(checkpointPath)) return cp;
-        try
-        {
-            var data = JsonConvert.DeserializeObject<CheckpointData>(File.ReadAllText(checkpointPath));
-            if (data?.CompletedChunks != null)
-            {
-                foreach (var id in data.CompletedChunks) cp._completedChunks.Add(id);
-                Utils.Logger.Info($"Loaded checkpoint: {data.CompletedChunks.Count} chunks (saved {data.LastSaved:u})");
-            }
-        }
-        catch (Exception ex) { Utils.Logger.Warn($"Checkpoint load failed ({ex.Message}) — starting fresh"); }
+        _sessionKey = sessionKey;
+        _db         = db;
+    }
+
+    /// <summary>
+    /// Load (or create) a progress entry from the DB for this session.
+    /// </summary>
+    public static Checkpoint Load(uint appId, string outputDir)
+    {
+        var db  = LocalDatabase.Instance;
+        var key = LocalDatabase.MakeSessionKey(appId, outputDir);
+        db.LoadProgress(key);
+
+        var cp = new Checkpoint(key, db);
+
+        // Warm the in-memory set from the DB
+        // (DB already loaded chunks into its own ConcurrentHashSet internally,
+        //  but we need our own copy for the hot-path IsChunkComplete check)
+        // Progress is loaded into the DB's in-memory cache by LoadProgress().
+        // IsChunkComplete() routes through that cache — no separate copy needed.
         return cp;
     }
 
     public void MarkChunkComplete(string chunkId)
     {
-        _completedChunks.Add(chunkId);
-        MaybeSave();
+        _completed.Add(chunkId);
+        _db.MarkChunkComplete(_sessionKey, chunkId);
     }
-
-    public bool IsChunkComplete(string chunkId) => _completedChunks.Contains(chunkId);
 
     /// <summary>
-    /// Time-throttled auto-save: writes to disk at most once every 30 seconds.
-    /// Call this after every completed chunk; it's cheap when the interval hasn't elapsed.
+    /// Hot path — checks the in-memory set first, falls back to DB.
+    /// O(1) for both.
     /// </summary>
-    private void MaybeSave()
-    {
-        if (DateTime.UtcNow - _lastSaveTime < _saveInterval) return;
-        lock (_saveLock)
-        {
-            // Double-check after acquiring lock
-            if (DateTime.UtcNow - _lastSaveTime < _saveInterval) return;
-            SaveInternal();
-            _lastSaveTime = DateTime.UtcNow;
-        }
-    }
+    public bool IsChunkComplete(string chunkId) =>
+        _completed.Contains(chunkId) || _db.IsChunkComplete(_sessionKey, chunkId);
 
-    /// <summary>Force-save regardless of throttle (called on pause/cancel).</summary>
-    public void Save()
-    {
-        lock (_saveLock)
-        {
-            SaveInternal();
-            _lastSaveTime = DateTime.UtcNow;
-        }
-    }
+    /// <summary>Force a DB flush (called on pause / Ctrl+C).</summary>
+    public void Save() => _db.FlushProgress(_sessionKey);
 
-    private void SaveInternal()
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(_checkpointPath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-            var tmp = _checkpointPath + ".tmp";
-            File.WriteAllText(tmp, JsonConvert.SerializeObject(new CheckpointData
-            {
-                CompletedChunks = _completedChunks.ToHashSet(),
-                LastSaved       = DateTime.UtcNow
-            }, Formatting.Indented));
-            File.Move(tmp, _checkpointPath, overwrite: true);
-
-            // Debug level — not Info — so it never spams the console
-            Utils.Logger.Debug($"Checkpoint saved: {_completedChunks.Count} chunks → {_checkpointPath}");
-        }
-        catch (Exception ex) { Utils.Logger.Error($"Failed to save checkpoint: {ex.Message}"); }
-    }
-
-    private class CheckpointData
-    {
-        public HashSet<string> CompletedChunks { get; set; } = new();
-        public DateTime LastSaved { get; set; }
-    }
+    /// <summary>Remove progress from DB once download finishes successfully.</summary>
+    public void Clear() => _db.ClearProgress(_sessionKey);
 }
+
+// ─── Shared ConcurrentHashSet ─────────────────────────────────────────────────
 
 public class ConcurrentHashSet<T> where T : notnull
 {
-    private readonly ConcurrentDictionary<T, byte> _d = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<T, byte> _d = new();
     public void Add(T i)      => _d.TryAdd(i, 0);
     public bool Contains(T i) => _d.ContainsKey(i);
     public HashSet<T> ToHashSet() => _d.Keys.ToHashSet();

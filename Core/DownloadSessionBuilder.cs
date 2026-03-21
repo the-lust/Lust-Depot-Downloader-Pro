@@ -44,8 +44,9 @@ public class DownloadSessionBuilder
             AppId          = _options.AppId,
             AppName        = await GetAppNameAsync(_options.AppId),
             OutputDir      = outputPath,
-            CheckpointPath = Path.Combine(outputPath, $"checkpoint_{_options.AppId}.json"),
+            // SessionKey set by engine
             MaxDownloads   = _options.MaxDownloads,
+            FallbackWorkers = _options.FallbackWorkers,
         };
 
         // Resolve workshop item → (depotId, manifestId) via SteamWorkshop
@@ -86,8 +87,9 @@ public class DownloadSessionBuilder
             AppId             = _options.AppId,
             AppName           = await GetAppNameAsync(_options.AppId),
             OutputDir         = outputPath,
-            CheckpointPath    = Path.Combine(outputPath, $"checkpoint_{_options.AppId}.json"),
+            // SessionKey is set by DownloadEngine after construction
             MaxDownloads      = _options.MaxDownloads,
+            FallbackWorkers   = _options.FallbackWorkers,
             ValidateChecksums = _options.Validate
         };
 
@@ -98,7 +100,14 @@ public class DownloadSessionBuilder
 
         // Community sources first (may save a CDN round-trip)
         Logger.Debug("Checking community manifest sources...");
-        var fetcher         = new ManifestSourceFetcher(_options.ApiKey);
+        // Merge CLI --api-key with both baked-in tokens (PAT + Classic = 10k req/hr)
+        var allTokens = new[] { _options.ApiKey }
+            .Concat(EmbeddedConfig.GitHubTokens)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t!)
+            .Distinct()
+            .ToArray();
+        var fetcher = new ManifestSourceFetcher(allTokens);
         ManifestResult? communityResult = await fetcher.FetchAsync(_options.AppId);
 
         // Depot list from PICS

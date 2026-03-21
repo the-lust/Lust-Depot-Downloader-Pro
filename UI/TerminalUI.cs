@@ -16,19 +16,19 @@ public class TerminalUI
 
     public void ShowHeader()
     {
-        AnsiConsole.Write(new Rule("[bold cyan]Lusts Depot Downloader Pro v1.0.0[/]")
+        var version = EmbeddedConfig.AppVersion;
+        AnsiConsole.Write(new Rule($"[bold cyan]Lusts Depot Downloader Pro v{version}[/]")
             { Justification = Justify.Center });
         AnsiConsole.WriteLine();
     }
 
     public void ShowStatus(string message) =>
-        AnsiConsole.MarkupLine($"[cyan]ℹ  {EscapeMarkup(message)}[/]");
+        AnsiConsole.MarkupLine($"[cyan]i  {EscapeMarkup(message)}[/]");
 
     public void SetAppName(string name) => _appName = name;
 
     public async Task RunDownloadWithProgressAsync(DownloadEngine engine, DownloadSession session)
     {
-        // Silence all log console output — TUI is the only renderer during download
         Logger.SilentMode = true;
 
         try
@@ -44,59 +44,59 @@ public class TerminalUI
                 .HideCompleted(false)
                 .Columns(
                     new TaskDescriptionColumn { Alignment = Justify.Left },
-                    new ProgressBarColumn       { Width = 34 },
+                    new ProgressBarColumn     { Width = 34 },
                     new PercentageColumn(),
                     new RemainingTimeColumn(),
                     new SpinnerColumn(Spinner.Known.Dots))
                 .StartAsync(async ctx =>
                 {
-                    var task = ctx.AddTask(
+                    var dlTask = ctx.AddTask(
                         $"[cyan]{EscapeMarkup(header)}[/]",
                         maxValue: 100);
 
                     engine.ProgressChanged += (_, e) =>
                     {
-                        task.Value = e.PercentComplete;
+                        dlTask.Value = e.PercentComplete;
 
-                        // Compose: "GameName  filename.ext  12.4 MB/s"
-                        string fileName = e.CurrentFile is { Length: > 0 } f
-                            ? Path.GetFileName(f)
+                        string fileName = !string.IsNullOrEmpty(e.CurrentFile)
+                            ? Path.GetFileName(e.CurrentFile)
                             : "...";
-                        if (fileName.Length > 38)
-                            fileName = "…" + fileName[^37..];
 
-                        string speed = e.SpeedMBps >= 0.01
-                            ? $"  [grey]{e.SpeedMBps:F1} MB/s[/]"
+                        if (fileName.Length > 38)
+                            fileName = "..." + fileName[^35..];
+
+                        string speedStr = e.SpeedMBps >= 0.01
+                            ? $"  {e.SpeedMBps:F1} MB/s"
                             : "";
 
-                        task.Description =
-                            $"[cyan]{EscapeMarkup(header)}[/]  " +
-                            $"[grey]{EscapeMarkup(fileName)}[/]{speed}";
+                        dlTask.Description =
+                            $"[cyan]{EscapeMarkup(header)}[/]" +
+                            $"  [grey]{EscapeMarkup(fileName)}{speedStr}[/]";
                     };
 
                     await engine.RunAsync();
 
-                    task.Value = 100;
-                    task.StopTask();
+                    dlTask.Value = 100;
+                    dlTask.StopTask();
                 });
 
             AnsiConsole.WriteLine();
 
             if (session.WasCancelled)
             {
-                AnsiConsole.MarkupLine("[yellow]⏸  Download paused. Resume with:[/]");
+                AnsiConsole.MarkupLine("[yellow]Paused — progress saved. Resume with:[/]");
                 AnsiConsole.MarkupLine(
-                    $"[grey]   --app {session.AppId} --output \"{EscapeMarkup(session.OutputDir)}\"" +
-                    $" --resume \"{EscapeMarkup(session.CheckpointPath)}\"[/]");
+                    $"[grey]  --app {session.AppId} " +
+                    $"--output \"{EscapeMarkup(session.OutputDir)}\" --resume[/]");
             }
             else
             {
-                AnsiConsole.MarkupLine("[bold green]✓  Download complete![/]");
+                AnsiConsole.MarkupLine("[bold green]  Download complete![/]");
             }
         }
         catch (OperationCanceledException)
         {
-            // Ctrl+C — checkpoint already saved by engine
+            // Ctrl+C — engine already saved progress
         }
         finally
         {
@@ -111,13 +111,13 @@ public class TerminalUI
             .BorderColor(Color.Cyan1)
             .AddColumn("Metric").AddColumn("Value");
 
-        t.AddRow("Downloaded",  $"[green]{stats.DownloadedMB:F2} MB[/]");
-        t.AddRow("Total",       $"{stats.TotalMB:F2} MB");
-        t.AddRow("Progress",    $"[cyan]{stats.Percent:F1}%[/]");
-        t.AddRow("Speed",       $"[yellow]{stats.SpeedMBps:F2} MB/s[/]");
-        t.AddRow("Chunks",      $"{stats.CompletedChunks}/{stats.TotalChunks}");
-        t.AddRow("Status",      stats.IsCompleted ? "[green]✓ Complete[/]" :
-                                stats.IsPaused    ? "[yellow]⏸  Paused[/]" : "[cyan]Running[/]");
+        t.AddRow("Downloaded", $"[green]{stats.DownloadedMB:F2} MB[/]");
+        t.AddRow("Total",      $"{stats.TotalMB:F2} MB");
+        t.AddRow("Progress",   $"[cyan]{stats.Percent:F1}%[/]");
+        t.AddRow("Speed",      $"[yellow]{stats.SpeedMBps:F2} MB/s[/]");
+        t.AddRow("Chunks",     $"{stats.CompletedChunks}/{stats.TotalChunks}");
+        t.AddRow("Status",     stats.IsCompleted ? "[green]Complete[/]" :
+                               stats.IsPaused    ? "[yellow]Paused[/]" : "[cyan]Running[/]");
         AnsiConsole.Write(t);
     }
 

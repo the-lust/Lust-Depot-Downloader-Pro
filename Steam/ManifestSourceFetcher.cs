@@ -69,7 +69,11 @@ public class ManifestSourceFetcher
     })
     { Timeout = TimeSpan.FromSeconds(45) };
 
-    private readonly string? _githubToken;
+    // Dual-token pool — each token has its own 5000 req/hr limit
+    // Requests round-robin across all available tokens
+    private readonly string[] _githubTokens;
+    private int _tokenIndex = -1;              // starts at -1 so first Increment gives 0
+    private readonly bool[] _tokenRateLimited; // per-token rate limit flag
 
     // XOR key used by sean-who/ManifestAutoUpdate for Key.vdf
     private static readonly byte[] SeanWhoXorKey =
@@ -82,8 +86,9 @@ public class ManifestSourceFetcher
     // XOR key used by luckygametools after AES
     private static readonly byte[] LuckyXorKey = Encoding.UTF8.GetBytes("hail");
 
-    // Thread-safe rate-limit flag
-    private volatile int _githubRateLimited = 0;
+    // Per-token rate-limit tracking
+    // (global flag checked for backward compat; per-token for dual mode)
+    private volatile int _anyTokenRateLimited = 0;
 
     // ─── Source table ─────────────────────────────────────────────────────
     // (repo, xorKeyForKeyVdf)   null = plain Key.vdf, no extra encryption
@@ -128,10 +133,27 @@ public class ManifestSourceFetcher
         ("DreamSourceLab/ManifestAutoUpdate",   null),
     };
 
-    public ManifestSourceFetcher(string? githubToken = null)
+    /// <param name="githubTokens">
+    /// One or more GitHub tokens. If multiple are provided, requests are
+    /// round-robined across them — each token has its own 5000 req/hr limit,
+    /// so two tokens = 10,000 req/hr effective capacity.
+    /// </param>
+    public ManifestSourceFetcher(params string?[] githubTokens)
     {
-        _githubToken = githubToken;
+        // Filter out null/empty, deduplicate
+        _githubTokens = githubTokens
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t!)
+            .Distinct()
+            .ToArray();
+        _tokenRateLimited = new bool[Math.Max(1, _githubTokens.Length)];
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("LustsDepotDownloaderPro/1.0");
+
+        if (_githubTokens.Length > 0)
+            Logger.Debug($"GitHub: {_githubTokens.Length} token(s) loaded " +
+                         $"({_githubTokens.Length * 5000:N0} req/hr capacity)");
+        else
+            Logger.Debug("GitHub: no tokens — anonymous (60 req/hr). Add tokens to .env.");
     }
 
     // ─── Public API ───────────────────────────────────────────────────────
@@ -142,7 +164,8 @@ public class ManifestSourceFetcher
     public async Task<ManifestResult?> FetchAsync(uint appId)
     {
         Logger.Info($"Searching ALL community manifest sources for app {appId}...");
-        _githubRateLimited = 0;
+        _anyTokenRateLimited = 0;
+        for (int i = 0; i < _tokenRateLimited.Length; i++) _tokenRateLimited[i] = false;
 
         var merged = new ManifestResult { AppId = appId, Source = "merged" };
 
@@ -187,7 +210,7 @@ public class ManifestSourceFetcher
                 Logger.Info($"[{r.Source}] +{mAdded} manifest(s), +{kAdded} key(s)");
         }
 
-        if (_githubRateLimited == 1)
+        if (_anyTokenRateLimited == 1)
             Logger.Warn("GitHub API rate limit hit. Use --api-key <github_pat> " +
                         "to raise cap from 60 to 5000 req/hr.");
 
@@ -228,16 +251,16 @@ public class ManifestSourceFetcher
         try
         {
             Logger.Debug($"[{repo}] checking branch {appId}...");
-            var headers = BuildGitHubHeaders();
+            var (headers, tokenIdx) = BuildGitHubHeaders();
 
             var branchUrl  = $"https://api.github.com/repos/{repo}/branches/{appId}";
-            var branchJson = await FetchJsonAsync(branchUrl, headers);
+            var branchJson = await FetchJsonAsync(branchUrl, headers, tokenIdx);
             if (branchJson == null || !branchJson.ContainsKey("commit")) return null;
 
             string sha     = branchJson["commit"]!["sha"]!.ToString();
             string treeUrl = branchJson["commit"]!["commit"]!["tree"]!["url"]!.ToString();
 
-            var treeJson = await FetchJsonAsync(treeUrl, headers);
+            var treeJson = await FetchJsonAsync(treeUrl, headers, tokenIdx);
             if (treeJson == null || !treeJson.ContainsKey("tree")) return null;
 
             var tree   = treeJson["tree"]!.ToArray();
@@ -304,10 +327,10 @@ public class ManifestSourceFetcher
         try
         {
             Logger.Debug($"[{repo}] trying...");
-            var headers = BuildGitHubHeaders();
+            var (headers, tokenIdx) = BuildGitHubHeaders();
 
             var contentsUrl  = $"https://api.github.com/repos/{repo}/contents/steamdb2/{appId}";
-            var contentsJson = await FetchJsonArrayAsync(contentsUrl, headers);
+            var contentsJson = await FetchJsonArrayAsync(contentsUrl, headers, tokenIdx);
             if (contentsJson == null) return null;
 
             string? datPath = contentsJson
@@ -672,16 +695,27 @@ public class ManifestSourceFetcher
 
     // ─── HTTP ─────────────────────────────────────────────────────────────
 
-    private Dictionary<string, string> BuildGitHubHeaders()
+    /// <summary>
+    /// Build headers using the next token in the round-robin pool.
+    /// Each call rotates to the next token so load is spread evenly.
+    /// </summary>
+    private (Dictionary<string, string> headers, int tokenIdx) BuildGitHubHeaders()
     {
         var h = new Dictionary<string, string>();
-        if (!string.IsNullOrEmpty(_githubToken))
-            h["Authorization"] = $"Bearer {_githubToken}";
-        return h;
+        if (_githubTokens.Length == 0) return (h, 0);
+
+        // Atomic round-robin: each call gets the next token index
+        int idx = Interlocked.Increment(ref _tokenIndex) % _githubTokens.Length;
+        h["Authorization"] = $"Bearer {_githubTokens[idx]}";
+        return (h, idx);
     }
 
+    /// <summary>Overload for callers that don't need the token index.</summary>
+    private Dictionary<string, string> BuildGitHubHeadersSimple() =>
+        BuildGitHubHeaders().headers;
+
     private async Task<JObject?> FetchJsonAsync(
-        string url, Dictionary<string, string> headers)
+        string url, Dictionary<string, string> headers, int tokenIdx = -1)
     {
         try
         {
@@ -689,16 +723,19 @@ public class ManifestSourceFetcher
             foreach (var (k, v) in headers) req.Headers.TryAddWithoutValidation(k, v);
             var resp = await _http.SendAsync(req);
 
-            if ((int)resp.StatusCode is 403 or 429)
+            if ((int)resp.StatusCode is 429)
+            { MarkTokenRateLimited(tokenIdx, url); return null; }
+
+            if ((int)resp.StatusCode == 403 && url.Contains("api.github.com"))
             {
-                if (url.Contains("api.github.com"))
-                {
-                    Interlocked.Exchange(ref _githubRateLimited, 1);
-                    Logger.Warn("GitHub API rate-limited. Use --api-key <github_pat> " +
-                                "to raise cap from 60 to 5000 req/hr.");
-                }
+                // Only treat as rate-limit if X-RateLimit-Remaining is 0
+                // A regular 403 (private/deleted repo) still has remaining > 0
+                bool isRateLimit = !resp.Headers.TryGetValues("X-RateLimit-Remaining",
+                    out var vals) || vals.FirstOrDefault() == "0";
+                if (isRateLimit) MarkTokenRateLimited(tokenIdx, url);
                 return null;
             }
+
             if (!resp.IsSuccessStatusCode) return null;
             return JObject.Parse(await resp.Content.ReadAsStringAsync());
         }
@@ -706,22 +743,51 @@ public class ManifestSourceFetcher
     }
 
     private async Task<JArray?> FetchJsonArrayAsync(
-        string url, Dictionary<string, string> headers)
+        string url, Dictionary<string, string> headers, int tokenIdx = -1)
     {
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
             foreach (var (k, v) in headers) req.Headers.TryAddWithoutValidation(k, v);
             var resp = await _http.SendAsync(req);
-            if ((int)resp.StatusCode is 403 or 429)
+
+            if ((int)resp.StatusCode is 429)
+            { MarkTokenRateLimited(tokenIdx, url); return null; }
+
+            if ((int)resp.StatusCode == 403 && url.Contains("api.github.com"))
             {
-                if (url.Contains("api.github.com")) Interlocked.Exchange(ref _githubRateLimited, 1);
+                bool isRateLimit = !resp.Headers.TryGetValues("X-RateLimit-Remaining",
+                    out var vals) || vals.FirstOrDefault() == "0";
+                if (isRateLimit) MarkTokenRateLimited(tokenIdx, url);
                 return null;
             }
+
             if (!resp.IsSuccessStatusCode) return null;
             return JArray.Parse(await resp.Content.ReadAsStringAsync());
         }
         catch { return null; }
+    }
+
+    private void MarkTokenRateLimited(int tokenIdx, string url)
+    {
+        if (!url.Contains("api.github.com")) return;
+
+        if (tokenIdx >= 0 && tokenIdx < _tokenRateLimited.Length)
+        {
+            _tokenRateLimited[tokenIdx] = true;
+            Logger.Debug($"GitHub token #{tokenIdx + 1} rate-limited — switching to other token(s).");
+        }
+
+        bool allExhausted = _githubTokens.Length == 0 || _tokenRateLimited.All(f => f);
+        if (allExhausted && Interlocked.CompareExchange(ref _anyTokenRateLimited, 1, 0) == 0)
+        {
+            string msg = _githubTokens.Length == 0
+                ? "GitHub rate-limited (anonymous). Add GITHUB_API_KEY_PAT and GITHUB_API_KEY_CLASSIC to .env for 10k req/hr."
+                : _githubTokens.Length == 1
+                    ? "GitHub token rate-limited. Add GITHUB_API_KEY_CLASSIC to .env for a second token."
+                    : "All GitHub tokens rate-limited. Limits reset at the top of each hour.";
+            Logger.Warn(msg);
+        }
     }
 
     private async Task<byte[]?> FetchRawAsync(string sha, string path, string repo)

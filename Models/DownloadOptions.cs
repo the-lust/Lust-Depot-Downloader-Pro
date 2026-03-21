@@ -30,6 +30,14 @@ public class DownloadOptions
     // Options
     public bool Validate { get; set; }
     public int MaxDownloads { get; set; } = 8;
+
+    /// <summary>
+    /// How many of the total workers are fallback (direct-HTTP) workers.
+    /// Default: -1 = auto (25% of MaxDownloads, minimum 1).
+    /// Set to 0 to disable fallback workers entirely (primary only).
+    /// Set to MaxDownloads to use fallback workers only.
+    /// </summary>
+    public int FallbackWorkers { get; set; } = -1;
     public int? CellId { get; set; }
     public uint? LoginId { get; set; }
     
@@ -53,9 +61,12 @@ public class DownloadOptions
     // API
     public string? ApiKey { get; set; }
     
+    // Steam Guard auto-TOTP (base64 shared_secret from maFile)
+    public string? SharedSecret { get; set; }
+
     // Control
     public bool Pause { get; set; }
-    public string? ResumeCheckpoint { get; set; }
+    public bool Resume { get; set; }
     public bool ShowStatus { get; set; }
     public bool TerminalUi { get; set; } = true;
 }

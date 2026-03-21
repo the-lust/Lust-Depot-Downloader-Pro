@@ -6,21 +6,23 @@ namespace LustsDepotDownloaderPro.Core;
 
 public class DownloadEngine : IDisposable
 {
-    private readonly DownloadSession _session;
-    private readonly SteamSession    _steamSession;
+    private readonly DownloadSession  _session;
+    private readonly SteamSession     _steamSession;
     private readonly CancellationToken _ct;
 
-    private readonly ChunkScheduler  _scheduler;
-    private readonly GlobalProgress  _progress;
-    private readonly Checkpoint      _checkpoint;
+    private readonly ChunkScheduler       _scheduler;
+    private readonly GlobalProgress       _progress;
+    private readonly Checkpoint           _checkpoint;
+    private readonly CdnManager           _cdnManager;
+    private readonly FallbackDownloader   _fallback;
     private readonly List<DownloadWorker> _workers = new();
-    private FileAssembler? _fileAssembler;
+    private FileAssembler? _assembler;
 
     public event EventHandler<ProgressEventArgs>? ProgressChanged;
 
     public DownloadEngine(
         DownloadSession session,
-        SteamSession steamSession,
+        SteamSession    steamSession,
         CancellationToken ct)
     {
         _session      = session;
@@ -28,30 +30,48 @@ public class DownloadEngine : IDisposable
         _ct           = ct;
         _progress     = new GlobalProgress();
         _scheduler    = new ChunkScheduler();
-        _checkpoint   = Checkpoint.Load(_session.CheckpointPath);
-        _fileAssembler = new FileAssembler(session.OutputDir);
-        Logger.Debug($"Download engine initialised for AppID {session.AppId}");
+        _assembler    = new FileAssembler(session.OutputDir);
+        _cdnManager   = new CdnManager(steamSession);
+
+        _session.SessionKey = LocalDatabase.MakeSessionKey(session.AppId, session.OutputDir);
+        _checkpoint = Checkpoint.Load(session.AppId, session.OutputDir);
+
+        int already = LocalDatabase.Instance.GetCompletedChunkCount(_session.SessionKey);
+        if (already > 0)
+            Logger.Info($"Resuming — {already} chunks already complete");
+
+        // Build fallback with already-cached CDN hosts (may be empty until pre-warm)
+        _fallback = new FallbackDownloader(steamSession.GetCachedCdnHosts());
+
+        Logger.Debug($"Engine ready: AppID {session.AppId}  key={_session.SessionKey}");
     }
 
     public async Task RunAsync()
     {
         try
         {
-            Logger.Info($"Starting download with {_session.MaxDownloads} workers");
+            int total = _session.MaxDownloads;
 
-            // ── KEY FIX: pre-warm CDN server cache before starting workers.
-            //    Without this, each worker independently fetches the server list
-            //    on startup. While they do that, the chunk scheduler fills the
-            //    5 000-chunk throttle window and then STALLS waiting for workers
-            //    that are still fetching CDN servers — causing the 2–7 min hang.
-            Logger.Debug("Pre-fetching CDN server list...");
+            Logger.Info($"Starting download — {total} workers " +
+                        $"({PrimaryCount(total)} primary + {SecondaryCount(total)} secondary)");
+
+            // Pre-warm CDN server list so FallbackDownloader has the authenticated hosts
             await _steamSession.GetCdnServersAsync();
 
-            for (int i = 0; i < _session.MaxDownloads; i++)
+            // Rebuild fallback now that we have servers
+            var updatedFallback = new FallbackDownloader(_steamSession.GetCachedCdnHosts());
+
+            // Create workers — 70% primary, 30% secondary (at least 1 secondary if >1 total)
+            for (int i = 0; i < total; i++)
             {
+                var engine = i < PrimaryCount(total)
+                    ? DownloadWorker.EngineType.Primary
+                    : DownloadWorker.EngineType.Secondary;
+
                 var w = new DownloadWorker(
-                    i, _scheduler, _progress, _session, _checkpoint, _ct,
-                    _steamSession, _fileAssembler!);
+                    i, engine, _scheduler, _progress, _session,
+                    _checkpoint, _ct, _steamSession, _cdnManager,
+                    updatedFallback, _assembler!);
                 w.ProgressChanged += OnWorkerProgress;
                 _workers.Add(w);
             }
@@ -63,35 +83,49 @@ public class DownloadEngine : IDisposable
 
             if (_ct.IsCancellationRequested)
             {
-                Logger.Info("Download paused — saving checkpoint...");
                 _checkpoint.Save();
                 _session.WasCancelled = true;
+                Logger.Info("Paused — progress saved");
             }
             else
             {
-                Logger.Debug("All chunks downloaded — finalizing files...");
+                Logger.Debug("Finalizing files...");
                 await FinalizeAllFilesAsync();
                 if (_session.ValidateChecksums) await VerifyFilesAsync();
-                Logger.Success("Download completed successfully!");
+                _checkpoint.Clear();
+                Logger.Success("Download complete!");
             }
         }
         catch (OperationCanceledException)
         {
-            Logger.Info("Download paused — saving checkpoint...");
             _checkpoint.Save();
             _session.WasCancelled = true;
+            Logger.Info("Paused — progress saved");
         }
         catch (Exception ex)
         {
-            Logger.Error($"Download engine error: {ex.Message}");
+            Logger.Error($"Engine error: {ex.Message}");
             throw;
         }
+    }
+
+    // 70% primary workers (rounded up), 30% secondary (at least 1 each when total>1)
+    private static int PrimaryCount(int total)
+    {
+        if (total <= 1) return 1;
+        return Math.Max(1, (int)Math.Ceiling(total * 0.7));
+    }
+
+    private static int SecondaryCount(int total)
+    {
+        if (total <= 1) return 0;
+        return total - PrimaryCount(total);
     }
 
     private void OnWorkerProgress(object? sender, ProgressEventArgs e)
     {
         var snap = _progress.GetSnapshot();
-        var args = new ProgressEventArgs
+        ProgressChanged?.Invoke(this, new ProgressEventArgs
         {
             BytesDownloaded = (long)(snap.DownloadedMB * 1_048_576),
             PercentComplete  = snap.Percent,
@@ -99,28 +133,25 @@ public class DownloadEngine : IDisposable
             EtaSeconds       = snap.EtaSeconds,
             WorkerId         = e.WorkerId,
             CurrentFile      = e.CurrentFile
-        };
-        ProgressChanged?.Invoke(this, args);
+        });
     }
 
     private async Task ScheduleChunksAsync()
     {
         foreach (var depot in _session.Depots)
         {
-            Logger.Debug($"Scheduling chunks for depot {depot.DepotId}");
+            Logger.Debug($"Scheduling depot {depot.DepotId}");
             foreach (var file in depot.Files)
             {
-                if (_session.FileFilters.Count > 0)
-                {
-                    bool match = _session.FileFilters.Any(f => FilterMatcher.Matches(file.FileName, f));
-                    if (!match) continue;
-                }
+                if (_session.FileFilters.Count > 0 &&
+                    !_session.FileFilters.Any(f => FilterMatcher.Matches(file.FileName, f)))
+                    continue;
+
                 foreach (var chunk in file.Chunks)
                 {
                     if (_ct.IsCancellationRequested) return;
                     if (_checkpoint.IsChunkComplete(chunk.ChunkIdHex)) continue;
 
-                    // Back-pressure: don't queue more than 10k chunks ahead of workers
                     while (_scheduler.PendingCount > 10_000 && !_ct.IsCancellationRequested)
                         await Task.Delay(50, _ct);
 
@@ -136,11 +167,11 @@ public class DownloadEngine : IDisposable
 
     private async Task FinalizeAllFilesAsync()
     {
-        if (_fileAssembler == null) return;
+        if (_assembler == null) return;
         foreach (var depot in _session.Depots)
             foreach (var file in depot.Files)
             {
-                try   { await _fileAssembler.FinalizeFileAsync(file); }
+                try   { await _assembler.FinalizeFileAsync(file); }
                 catch (Exception ex) { Logger.Warn($"Finalize {file.FileName}: {ex.Message}"); }
             }
     }
@@ -148,25 +179,20 @@ public class DownloadEngine : IDisposable
     private async Task VerifyFilesAsync()
     {
         Logger.Info("Verifying files...");
-        int total = _session.Depots.Sum(d => d.Files.Count);
-        int done  = 0;
+        int total = _session.Depots.Sum(d => d.Files.Count), done = 0;
         foreach (var depot in _session.Depots)
             foreach (var file in depot.Files)
             {
-                string path = System.IO.Path.Combine(
-                    _session.OutputDir,
-                    file.FileName.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                string path = Path.Combine(_session.OutputDir,
+                    file.FileName.Replace('/', Path.DirectorySeparatorChar));
 
                 if (File.Exists(path))
-                {
-                    if (new FileInfo(path).Length != (long)file.Size)
-                        Logger.Warn($"Size mismatch: {file.FileName}");
-                }
+                { if (new FileInfo(path).Length != (long)file.Size) Logger.Warn($"Size mismatch: {file.FileName}"); }
                 else Logger.Warn($"Missing: {file.FileName}");
 
                 if (++done % 500 == 0) Logger.Info($"Verified {done}/{total}");
             }
-        Logger.Info($"Verification complete: {done}/{total} files");
+        Logger.Info($"Verification done: {done}/{total}");
         await Task.CompletedTask;
     }
 
@@ -179,14 +205,18 @@ public class DownloadEngine : IDisposable
             TotalMB         = s.TotalMB,
             Percent         = s.Percent,
             SpeedMBps       = s.SpeedMBps,
-            CompletedChunks = _checkpoint.CompletedChunks.Count,
+            CompletedChunks = _checkpoint.Count,
             TotalChunks     = _scheduler.TotalScheduled,
             IsCompleted     = _scheduler.IsComplete,
             IsPaused        = _ct.IsCancellationRequested
         };
     }
 
-    public void Dispose() => _fileAssembler?.Dispose();
+    public void Dispose()
+    {
+        _assembler?.Dispose();
+        _cdnManager.Dispose();
+    }
 }
 
 public class ProgressEventArgs : EventArgs

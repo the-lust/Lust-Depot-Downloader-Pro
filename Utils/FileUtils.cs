@@ -197,21 +197,7 @@ public class UserCredentials
     public DateTime LastUsed { get; set; }
 }
 
-public static class CheckpointManager
-{
-    public static void SaveCheckpoint(DownloadSession session)
-    {
-        try
-        {
-            session.SaveCheckpoint();
-            Logger.Info($"Checkpoint saved: {session.CheckpointPath}");
-        }
-        catch (Exception ex)
-        {
-            Logger.Error($"Failed to save checkpoint: {ex.Message}");
-        }
-    }
-}
+
 
 public static class ProcessRunner
 {
